@@ -35,19 +35,19 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 
 **Primary: Application developers** deploying Vercel AI SDK workloads to serverless runtimes
 
-| User                            | Context                                                                                        | Need                                                                                                     |
-| ------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Cloudflare Workers developer    | Building AI features with Hono or plain Worker handlers; Langfuse as the observability backend | OTel traces from `generateText` / `streamText` calls appear in Langfuse without Node.js SDK dependencies |
-| Deno Deploy developer           | Same AI SDK stack; Deno's `node:async_hooks` compat available                                  | Same trace export without platform-specific changes                                                      |
-| Vercel Edge Functions developer | V8 isolate model identical to Cloudflare Workers; same runtime constraints apply               | Same trace export without platform-specific changes                                                      |
+| User                            | Context                                                                                                         | Need                                                                                             |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Cloudflare Workers developer    | Building AI features with Hono or plain Worker handlers; any OTLP/HTTP collector (e.g. Langfuse) as the backend | OTel traces from AI SDK calls export to any OTLP/HTTP collector without Node.js SDK dependencies |
+| Deno Deploy developer           | Same AI SDK stack; Deno's `node:async_hooks` compat available                                                   | Same trace export without platform-specific changes                                              |
+| Vercel Edge Functions developer | V8 isolate model identical to Cloudflare Workers; same runtime constraints apply                                | Same trace export without platform-specific changes                                              |
 
 **Non-users (out of scope)**
 
-| Excluded user                                                  | Reason                                                                          |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Node.js server developers                                      | `@langfuse/otel` + `@opentelemetry/sdk-node` already works correctly on Node.js |
-| Developers needing gRPC / protobuf export                      | Not supported; OTLP/HTTP + JSON is sufficient for all major OTel collectors     |
-| Developers instrumenting CF bindings (KV, D1, Durable Objects) | Out of scope; `@microlabs/otel-cf-workers` covers that use case                 |
+| Excluded user                                                  | Reason                                                                                                                                           |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Node.js server developers                                      | Standard `@opentelemetry/sdk-node` works correctly on Node.js regardless of backend; `@langfuse/otel` is one option for Langfuse-specific setups |
+| Developers needing gRPC / protobuf export                      | Not supported; OTLP/HTTP + JSON is sufficient for all major OTel collectors                                                                      |
+| Developers instrumenting CF bindings (KV, D1, Durable Objects) | Out of scope; `@microlabs/otel-cf-workers` covers that use case                                                                                  |
 
 ---
 
@@ -55,23 +55,23 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 
 **Before this package exists**
 
-| Scenario                                                                                         | Outcome                                                                                                                                                                                                        |
-| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Developer follows Langfuse official docs (NodeSDK + LangfuseSpanProcessor) on Cloudflare Workers | Build fails or spans are silently dropped; no traces appear in Langfuse                                                                                                                                        |
-| Developer enables `nodejs_compat` and retries                                                    | `perf_hooks` polyfill returns `timeOrigin = 0`; all span timestamps are wrong; failure is silent                                                                                                               |
-| Developer uses `@microlabs/otel-cf-workers` pointed at Langfuse OTLP endpoint                    | HTTP and CF binding spans export correctly; AI SDK spans (`ai.generateText`, etc.) do not appear because the AI SDK requires a registered `TracerProvider` with a `tracer` passed via `experimental_telemetry` |
+| Scenario                                                                                               | Outcome                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Developer follows standard Node.js OTel setup (e.g. NodeSDK + backend processor) on Cloudflare Workers | Build fails or spans are silently dropped; no traces reach the collector                                                                                                                                       |
+| Developer enables `nodejs_compat` and retries                                                          | `perf_hooks` polyfill returns `timeOrigin = 0`; all span timestamps are wrong; failure is silent                                                                                                               |
+| Developer uses `@microlabs/otel-cf-workers` pointed at an OTLP/HTTP endpoint (e.g. Langfuse)           | HTTP and CF binding spans export correctly; AI SDK spans (`ai.generateText`, etc.) do not appear because the AI SDK requires a registered `TracerProvider` with a `tracer` passed via `experimental_telemetry` |
 
 **After this package exists**
 
-| Capability                                                                      | State                                                                                    |
-| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| AI SDK spans export to Langfuse from Cloudflare Workers                         | Supported                                                                                |
-| Multiple AI SDK calls within one request grouped under one Langfuse trace       | Supported — requires `nodejs_compat` flag for multi-call grouping                        |
-| Custom application spans (RAG retrieval, DB queries) included in the same trace | Supported                                                                                |
-| Span export completes after the HTTP response is sent                           | Supported — isolate lifetime is extended until export resolves                           |
-| Thrown exceptions from AI SDK calls appear as `ERROR` in Langfuse               | Supported — no manual error annotation required                                          |
-| Target backend is swappable to any OTLP/HTTP + JSON collector                   | Supported — URL and credentials are runtime configuration, not compile-time dependencies |
-| Timestamps are correct in V8 isolates                                           | Supported — does not depend on `node:perf_hooks`                                         |
+| Capability                                                                        | State                                                                                    |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| AI SDK spans export to any configured OTLP/HTTP collector from Cloudflare Workers | Supported                                                                                |
+| Multiple AI SDK calls within one request grouped under one trace in the collector | Supported — requires `nodejs_compat` flag for multi-call grouping                        |
+| Custom application spans (RAG retrieval, DB queries) included in the same trace   | Supported                                                                                |
+| Span export completes after the HTTP response is sent                             | Supported — isolate lifetime is extended until export resolves                           |
+| Thrown exceptions from AI SDK calls are marked as `ERROR` in the exported trace   | Supported — no manual error annotation required                                          |
+| Target backend is swappable to any OTLP/HTTP + JSON collector                     | Supported — URL and credentials are runtime configuration, not compile-time dependencies |
+| Timestamps are correct in V8 isolates                                             | Supported — does not depend on `node:perf_hooks`                                         |
 
 ## Scope
 
