@@ -381,4 +381,88 @@ The root-span helper is designed for Hono middleware and plain Worker fetch hand
 
 ---
 
+### Context Propagation
+
+Context propagation is how all AI SDK calls within one request are grouped under a single Langfuse trace rather than appearing as separate unrelated traces. This section defines both available propagation patterns and when each applies. See User Journeys 2 and 7 for the corresponding end-to-end flows.
+
+---
+
+#### How Context Inheritance Works
+
+OpenTelemetry carries trace identity in a `Context` object. When an AI SDK call starts a new span, it reads the currently active context via `context.active()` to determine its parent. If the active context holds a live span, the new span inherits that span's `traceId` and records the parent's `spanId` as its `parentSpanId`. If no span is active, the AI SDK call starts a fresh root span with a new, unrelated `traceId`.
+
+| Active context at call time | Result                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| No active span              | AI SDK call becomes a new root span with its own `traceId` — appears as a separate trace in Langfuse         |
+| Active span present         | AI SDK call inherits the active span's `traceId` and becomes a child — appears under the same Langfuse trace |
+
+The `experimental_telemetry.tracer` option controls which provider records the span, but has no effect on parentage. Parentage is determined solely by the active context at the moment the span is started.
+
+---
+
+#### Propagation with `AsyncLocalStorage` (requires `nodejs_compat`)
+
+_Corresponds to User Journey 2._
+
+When `AsyncLocalStorageContextManager` is registered at module scope (see Provider Factory — Context Manager Registration), the OTel context flows automatically across all `await` boundaries within a request.
+
+| Step                             | Observable behavior                                                                                                                                                |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Module load                      | `AsyncLocalStorageContextManager` is enabled once. All subsequent spans on any async execution path can read the active context automatically.                     |
+| Root span creation               | The developer creates a root span via `rootSpan(name, attributes?)` and receives the span and an activated context object.                                         |
+| Context activation               | The developer passes the context to `context.with(ctx, handler)`. For the duration of `handler`, the root span is the active context on that async execution path. |
+| AI SDK calls inside handler      | Each call reads `context.active()`, finds the root span, and becomes a child. No per-call wrapping is needed.                                                      |
+| Manual spans inside handler      | `tracer.startActiveSpan()` calls also inherit the root span as parent without any extra configuration.                                                             |
+| Parallel calls via `Promise.all` | All parallel branches spawned inside the `context.with(ctx, handler)` scope inherit the root span's context automatically.                                         |
+
+This pattern requires the `nodejs_compat` compatibility flag in `wrangler.toml`. Without it, the module-level import of `@opentelemetry/context-async-hooks` fails and the Worker does not start.
+
+---
+
+#### Manual Context Threading (without `nodejs_compat`)
+
+_Corresponds to User Journey 7._
+
+When `AsyncLocalStorage` is unavailable, context does not propagate automatically across `await` boundaries. Each AI SDK call must be individually wrapped to receive the parent context.
+
+| Step                             | Observable behavior                                                                                                                                                                                                                                      |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Root span creation               | The developer creates a root span and holds a reference to it.                                                                                                                                                                                           |
+| Per-call wrapping                | Each AI SDK call is wrapped in `context.with(ctx, () => call(...))` where `ctx` is a context derived from the root span. The AI SDK reads `context.active()` synchronously at span-start time, finds the root span, and records the parent relationship. |
+| Sequential calls                 | Each call is wrapped individually. Calls execute one after the other; each receives the same root context.                                                                                                                                               |
+| Parallel calls via `Promise.all` | Each parallel call is wrapped in its own `context.with(ctx, ...)`. Without per-branch wrapping, parallel branches do not inherit the root span and each starts a new trace.                                                                              |
+| Calls without wrapping           | Any AI SDK call not wrapped in `context.with(ctx, ...)` starts a new root span with an independent `traceId` and appears as a separate trace in Langfuse.                                                                                                |
+
+This pattern requires no additional dependencies or compatibility flags. It is more verbose than the `AsyncLocalStorage` pattern but produces identical trace output in Langfuse.
+
+---
+
+#### Pattern Selection
+
+| Scenario                                                          | Pattern                                                                                                                                               | `nodejs_compat` required |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| Single AI SDK call per request                                    | Pass `tracer` directly; no propagation needed                                                                                                         | No                       |
+| Multiple sequential calls, grouped under one trace                | `AsyncLocalStorage` + middleware root span                                                                                                            | Yes                      |
+| Multiple sequential calls, `nodejs_compat` unavailable            | Manual `context.with()` per call                                                                                                                      | No                       |
+| Parallel calls via `Promise.all`, with `nodejs_compat` enabled    | All parallel branches spawned inside the outer `context.with(ctx, handler)` scope inherit context automatically; no per-branch wrapping needed        | Yes                      |
+| Parallel calls via `Promise.all`, without `nodejs_compat` enabled | Each parallel call must be individually wrapped in `context.with(ctx, ...)` — without per-branch wrapping each branch starts an independent new trace | No                       |
+
+---
+
+#### Resulting Trace Structure in Langfuse
+
+All spans sharing a `traceId` are grouped by Langfuse into a single Trace entity. The observation tree is determined by the `parentSpanId` relationships in the exported spans.
+
+| Condition                                                | Langfuse outcome                                                                                      |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| All AI SDK calls share a `traceId`                       | A single Trace appears; the root span is the top-level observation; AI SDK spans appear as children   |
+| `ai.generateText` and `ai.generateText.doGenerate` spans | Classified as `generation` observations; token usage appears on each                                  |
+| Token usage across multiple calls                        | Rolled up across all `generation` observations within the Trace                                       |
+| One call throws an exception                             | That `generation` observation is marked `ERROR`; the Trace-level severity is also elevated to `ERROR` |
+| AI SDK calls have different `traceId`s (no propagation)  | Each call appears as a separate, unrelated Trace in Langfuse; no token roll-up across calls           |
+
+The root span's attributes (for example `langfuse.trace.userId`, `langfuse.trace.sessionId`) propagate to the Trace entity metadata. These attributes should be set on the root span before it ends.
+
+---
+
 <!-- Remaining Behavior and Refinement sections to follow -->
