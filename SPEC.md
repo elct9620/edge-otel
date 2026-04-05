@@ -838,6 +838,31 @@ interface ExportTraceServiceRequest {
 | Cold start                 | The first execution of a Worker module in a new isolate instance. Module-level code (including `AsyncLocalStorageContextManager` registration) runs exactly once per cold start.                                             |
 | Warm isolate               | A Worker isolate reused across multiple requests in the same instance. Module-level state persists; per-request state must not persist between requests.                                                                     |
 
+---
+
+### Implementation Checklist
+
+This checklist captures correctness rules where a violation produces silent bad data or silent span loss rather than a visible error. All rules are observable behavioral contracts — they describe what must be true of the system's output, not how to produce it.
+
+#### Generic OTLP Correctness Rules
+
+| #   | Rule                                                                                                                                                                                 | Consequence of violation                                                                                                                                                            |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `startTimeUnixNano` and `endTimeUnixNano` are decimal strings produced by string concatenation of seconds and zero-padded nanoseconds — not by arithmetic multiplication             | Arithmetic overflow past `Number.MAX_SAFE_INTEGER` silently rounds the value; all span timestamps in the collector are wrong by an arbitrary amount, with no error thrown           |
+| 2   | `intValue` attribute values are decimal strings, not JavaScript numbers                                                                                                              | Token counts and 64-bit counters that exceed `Number.MAX_SAFE_INTEGER` are silently rounded by `JSON.stringify`; structured usage fields in the collector contain incorrect values  |
+| 3   | `parentSpanId` is omitted entirely from the JSON object when a span has no parent — an empty string `""` is not a valid substitute                                                   | Backends treat an empty `parentSpanId` as a malformed or non-root span; Langfuse rejects the span or misparses the trace hierarchy                                                  |
+| 4   | The tracer provider is never registered as the global OTel singleton — the `tracer` reference from the handle is the only path by which spans enter the provider                     | Global registration pollutes the shared OTel singleton; in warm isolates, multiple requests may write to the same global state, causing trace cross-contamination                   |
+| 5   | `AsyncLocalStorageContextManager` is active before the first request handler fires — it is registered at module initialisation time, not inside a request handler or middleware body | Context propagation falls back to the noop manager for any span created before registration; AI SDK calls made in module-level code produce orphaned spans with no parent           |
+| 6   | `flush()` always resolves — it never rejects, regardless of HTTP export errors                                                                                                       | A rejected `flush()` propagates through `ctx.waitUntil()` and leaves the isolate in an undefined termination state; subsequent spans in the same isolate may be silently dropped    |
+| 7   | `SimpleSpanProcessor` is the span processor in use — `BatchSpanProcessor` is not used                                                                                                | `BatchSpanProcessor` depends on background timers that do not survive isolate request boundaries; spans buffered in its internal queue are silently dropped when the isolate exits  |
+| 8   | `ctx.waitUntil(flush())` is called before the HTTP response is returned                                                                                                              | Once the response is returned without a `waitUntil` registration, the isolate may be torn down before the export `fetch()` completes; all buffered spans are silently dropped       |
+| 9   | For `streamText`, the flush is deferred until the response stream is fully consumed                                                                                                  | `ai.streamText.doStream` spans end only when the stream is consumed; flushing before consumption exports an incomplete span — missing end time, output tokens, and usage attributes |
+| 10  | `forceFlush()` is called to drain spans per request — `shutdown()` is not used for per-request flushing                                                                              | `shutdown()` permanently marks the exporter as shut down; subsequent `export()` calls are rejected, silently dropping all spans for the remainder of the isolate's lifetime         |
+
+Additional correctness rules specific to Langfuse are documented in **Backend-Specific Guidance § Langfuse § Semantic Mapping**.
+
+---
+
 ## Backend-Specific Guidance
 
 This section documents backend-specific configuration and interpretation rules. The core specification above is backend-agnostic. Backend presets provide default configuration values and may require additional HTTP headers or span attributes.
