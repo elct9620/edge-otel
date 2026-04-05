@@ -7,6 +7,7 @@ export interface ExporterConfig {
 
 export interface TracerProviderOptions extends ExporterConfig {
   serviceName?: string;
+  scopeName?: string;
 }
 
 export interface TracerHandle {

@@ -77,6 +77,20 @@ describe("createTracerProvider", () => {
 
       span.end();
     });
+
+    it("uses custom scopeName when provided in options", () => {
+      vi.stubGlobal("fetch", makeFetchStub());
+      const { tracer } = createTracerProvider({
+        endpoint: DEFAULT_ENDPOINT,
+        scopeName: "my-custom-scope",
+      });
+
+      const span = tracer.startSpan("probe");
+      const readableSpan = span as unknown as ReadableSpan;
+      expect(readableSpan.instrumentationScope.name).toBe("my-custom-scope");
+
+      span.end();
+    });
   });
 
   // -------------------------------------------------------------------------
