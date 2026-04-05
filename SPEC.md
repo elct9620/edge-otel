@@ -304,7 +304,7 @@ The tracer is passed directly to each AI SDK call via `experimental_telemetry.tr
 
 The tracer is obtained with the instrumentation scope name `'ai'`.
 
-This value is **not a label** — it is a functional requirement. Langfuse's ingestion processor gates its AI SDK token-usage processing path on `instrumentationScopeName === 'ai'`. Any other scope name routes token counts through the generic OTel path, which silently omits AI SDK-specific token fields from Langfuse's structured usage data.
+This is the AI SDK convention for AI/LLM operation tracing. The AI SDK emits spans under this scope name, and backends that support AI SDK integration key on this value to classify and enrich AI operation data.
 
 ---
 
@@ -322,12 +322,12 @@ This value is **not a label** — it is a functional requirement. Langfuse's ing
 
 Every span exported by the provider carries the following resource attributes.
 
-| Attribute                | Source                        | Notes                                                                  |
-| ------------------------ | ----------------------------- | ---------------------------------------------------------------------- |
-| `service.name`           | Configuration (`serviceName`) | Defaults to `'cloudflare-worker'`. Appears in Langfuse trace metadata. |
-| `telemetry.sdk.name`     | OTel SDK                      | Populated automatically by the SDK.                                    |
-| `telemetry.sdk.language` | OTel SDK                      | Populated automatically by the SDK.                                    |
-| `telemetry.sdk.version`  | OTel SDK                      | Populated automatically by the SDK.                                    |
+| Attribute                | Source                        | Notes                                                                |
+| ------------------------ | ----------------------------- | -------------------------------------------------------------------- |
+| `service.name`           | Configuration (`serviceName`) | Defaults to `'cloudflare-worker'`. Standard OTel resource attribute. |
+| `telemetry.sdk.name`     | OTel SDK                      | Populated automatically by the SDK.                                  |
+| `telemetry.sdk.language` | OTel SDK                      | Populated automatically by the SDK.                                  |
+| `telemetry.sdk.version`  | OTel SDK                      | Populated automatically by the SDK.                                  |
 
 ---
 
@@ -364,12 +364,15 @@ The root-span helper is designed for Hono middleware and plain Worker fetch hand
 
 #### Configuration
 
-| Option        | Required | Default                      | Description                                                                                                                                                                                                                                                |
-| ------------- | -------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `publicKey`   | Yes      | —                            | Langfuse project public key. Used as the Basic Auth username in the `Authorization` header sent to the OTLP endpoint.                                                                                                                                      |
-| `secretKey`   | Yes      | —                            | Langfuse project secret key. Used as the Basic Auth password.                                                                                                                                                                                              |
-| `baseUrl`     | No       | `https://cloud.langfuse.com` | Base URL of the OTLP endpoint. Use `https://us.cloud.langfuse.com` for the US region, `https://hipaa.cloud.langfuse.com` for the HIPAA region, or a self-hosted domain. The endpoint path `{baseUrl}/api/public/otel/v1/traces` is appended automatically. |
-| `serviceName` | No       | `'cloudflare-worker'`        | Value of the `service.name` resource attribute. Appears in Langfuse trace metadata.                                                                                                                                                                        |
+The factory accepts three categories of configuration:
+
+| Category                   | Required | Default               | Description                                                                                                                           |
+| -------------------------- | -------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Endpoint URL               | Yes      | —                     | The OTLP/HTTP endpoint to which spans are exported. No default; backend presets provide this value.                                   |
+| Authentication credentials | Yes      | —                     | Credentials used to authenticate with the OTLP endpoint (e.g., as HTTP Basic Auth). No default; backend presets provide these values. |
+| `serviceName`              | No       | `'cloudflare-worker'` | Value of the `service.name` resource attribute. Standard OTel resource attribute identifying the reporting service.                   |
+
+The shape of the credentials and the exact field names are determined by the implementation. Backend-specific presets (such as a Langfuse preset) supply the endpoint URL and credential values from backend-specific configuration.
 
 ---
 
@@ -377,9 +380,8 @@ The root-span helper is designed for Hono middleware and plain Worker fetch hand
 
 | Scenario                                                 | Factory behavior                                                                                                                         |
 | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `publicKey` is absent or empty                           | The factory produces a handle, but every `forceFlush()` call results in an HTTP 401 response; spans are dropped and a warning is logged. |
-| `secretKey` is absent or empty                           | Same as above.                                                                                                                           |
-| `baseUrl` is malformed                                   | `flush()` rejects the `fetch()` call; the error is caught, a warning is logged, and spans are dropped. `flush()` still resolves.         |
+| Authentication credentials are absent or empty           | The factory produces a handle, but every `forceFlush()` call results in an HTTP 401 response; spans are dropped and a warning is logged. |
+| Endpoint URL is malformed                                | `flush()` rejects the `fetch()` call; the error is caught, a warning is logged, and spans are dropped. `flush()` still resolves.         |
 | `rootSpan()` called before context manager is registered | The span is created without an active parent; it becomes a root span as expected. No error is thrown.                                    |
 | `flush()` called with an empty buffer                    | Resolves immediately; no HTTP request is made.                                                                                           |
 
