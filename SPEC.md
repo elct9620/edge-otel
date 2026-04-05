@@ -826,17 +826,18 @@ interface ExportTraceServiceRequest {
 
 #### Terminology
 
-| Term                       | Definition                                                                                                                                                                                                                   |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Handle                     | The object returned by `createTracerProvider`; contains `tracer`, `flush`, and `rootSpan`. The application holds this object and uses it for every AI SDK call and flush registration within a request.                      |
-| Root span                  | The top-level span for a single request; created by the Hono middleware or by a direct call to `rootSpan(name, attributes?)`. All AI SDK spans within the request are parented under it and share its `traceId`.             |
-| Flush                      | The operation that drains the in-memory span buffer and exports all buffered spans to the OTLP endpoint in a single HTTP POST. Registered with `ctx.waitUntil()` to run after the HTTP response is sent.                     |
-| Generation                 | An OTel span representing an LLM call, carrying model, token usage, and cost attributes. Backend-specific (e.g., Langfuse classifies this as a distinct observation sub-type).                                               |
-| Instrumentation scope name | The string identifier passed to `provider.getTracer(name)` when obtaining a `Tracer`. Must be `'ai'` for AI SDK spans — the convention established by the Vercel AI SDK.                                                     |
-| OTLP/HTTP JSON             | The wire protocol used by this package: OpenTelemetry Protocol over HTTP, with the payload serialized as JSON. The alternative encoding (protobuf) is not used.                                                              |
-| `waitUntil`                | A Cloudflare Workers execution context API (`ctx.waitUntil(promise)`) that keeps the isolate alive until `promise` resolves, even after the HTTP response has been sent. Used to extend isolate lifetime for the flush POST. |
-| Cold start                 | The first execution of a Worker module in a new isolate instance. Module-level code (including `AsyncLocalStorageContextManager` registration) runs exactly once per cold start.                                             |
-| Warm isolate               | A Worker isolate reused across multiple requests in the same instance. Module-level state persists; per-request state must not persist between requests.                                                                     |
+| Term                       | Definition                                                                                                                                                                                                                                                              |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Handle                     | The object returned by `createTracerProvider`; contains `tracer`, `flush`, and `rootSpan`. The application holds this object and uses it for every AI SDK call and flush registration within a request.                                                                 |
+| Root span                  | The top-level span for a single request; created by the Hono middleware or by a direct call to `rootSpan(name, attributes?)`. All AI SDK spans within the request are parented under it and share its `traceId`.                                                        |
+| Flush                      | The operation that drains the in-memory span buffer and exports all buffered spans to the OTLP endpoint in a single HTTP POST. Registered with `ctx.waitUntil()` to run after the HTTP response is sent.                                                                |
+| Generation                 | An OTel span representing an LLM call, carrying model, token usage, and cost attributes. Backend-specific (e.g., Langfuse classifies this as a distinct observation sub-type).                                                                                          |
+| Instrumentation scope name | The string identifier passed to `provider.getTracer(name)` when obtaining a `Tracer`. Must be `'ai'` for AI SDK spans — the convention established by the Vercel AI SDK.                                                                                                |
+| OTLP/HTTP JSON             | The wire protocol used by this package: OpenTelemetry Protocol over HTTP, with the payload serialized as JSON. The alternative encoding (protobuf) is not used.                                                                                                         |
+| `waitUntil`                | A Cloudflare Workers execution context API (`ctx.waitUntil(promise)`) that keeps the isolate alive until `promise` resolves, even after the HTTP response has been sent. Used to extend isolate lifetime for the flush POST.                                            |
+| Cold start                 | The first execution of a Worker module in a new isolate instance. Module-level code (including `AsyncLocalStorageContextManager` registration) runs exactly once per cold start.                                                                                        |
+| Warm isolate               | A Worker isolate reused across multiple requests in the same instance. Module-level state persists; per-request state must not persist between requests.                                                                                                                |
+| Backend preset             | A configuration helper that constructs an `ExporterConfig` with the default `endpoint` URL and required `headers` for a specific backend. Adding a new preset requires no changes to the core exporter, processor, or provider. Langfuse is the first supported preset. |
 
 ---
 
@@ -860,6 +861,58 @@ This checklist captures correctness rules where a violation produces silent bad 
 | 10  | `forceFlush()` is called to drain spans per request — `shutdown()` is not used for per-request flushing                                                                              | `shutdown()` permanently marks the exporter as shut down; subsequent `export()` calls are rejected, silently dropping all spans for the remainder of the isolate's lifetime         |
 
 Additional correctness rules specific to Langfuse are documented in **Backend-Specific Guidance § Langfuse § Semantic Mapping**.
+
+---
+
+### Extensibility & Portability
+
+#### Backend Swappability
+
+The exporter targets any OTLP/HTTP + JSON endpoint. The endpoint URL and all HTTP headers (including authentication) are runtime configuration — no recompilation is required to change backends.
+
+Multiple exporters can be wired to the same provider by attaching a separate `SimpleSpanProcessor` for each exporter. Every span processor in the chain receives each span; spans are forwarded to all attached exporters independently.
+
+| Capability                     | Description                                                                                          |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| Any OTLP/HTTP + JSON endpoint  | Supply the endpoint URL and any required headers in `ExporterConfig`; the exporter sends spans there |
+| Multiple simultaneous backends | Add one `SimpleSpanProcessor` per exporter to the provider; all processors receive every span        |
+| Backend preset                 | Provides default `endpoint` and `headers` values for a specific backend; no other component changes  |
+
+Adding support for a new backend requires only a new preset that constructs an `ExporterConfig` — the exporter, processor, provider, and middleware are unchanged. Langfuse is the first supported backend preset.
+
+---
+
+#### Custom Span Support
+
+The `tracer` member of `TracerHandle` is a standard OTel `Tracer` from `@opentelemetry/api`. Application code uses it to create manual spans for any operation that should appear in the trace — RAG retrieval, database queries, external API calls, or any other unit of work.
+
+Manual spans created via the tracer automatically join the active trace when a root context is in scope. No extra configuration is required; context inheritance follows the same rules as AI SDK spans (see Context Propagation).
+
+---
+
+#### Runtime Portability
+
+The package depends only on Web Platform APIs (`fetch()`, `btoa()`, `crypto.getRandomValues()`) and the four OTel packages listed under Dependencies. These are available across all major serverless runtimes.
+
+The only runtime-specific integration point is how the host keeps the process alive after the HTTP response is sent — the `waitUntil()` spelling varies by platform.
+
+| Runtime               | ALS available                           | Flush mechanism                          | Notes          |
+| --------------------- | --------------------------------------- | ---------------------------------------- | -------------- |
+| Cloudflare Workers    | `nodejs_compat` flag                    | `ctx.waitUntil(flush())`                 | Primary target |
+| Deno Deploy           | `node:async_hooks` compatibility module | `Deno.serve` handler `waitUntil`         |                |
+| Vercel Edge Functions | V8 isolate — same model as CF           | `event.waitUntil(flush())`               |                |
+| AWS Lambda@Edge       | Node.js runtime — no flags              | `context.callbackWaitsForEmptyEventLoop` |                |
+
+---
+
+#### Known Limitations
+
+| Item                    | Status        | Note                                                                                                                        |
+| ----------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Protobuf serialization  | Not supported | Would reduce payload size ~30–50%; blocked on a viable pure-JS encoder within acceptable bundle size                        |
+| Batch span processing   | Not supported | `BatchSpanProcessor` is incompatible with short-lived isolates; `SimpleSpanProcessor` with explicit flush is used instead   |
+| Streaming TTFT tracking | Not supported | Time-to-first-token from `streamText` calls is not yet captured as a span attribute                                         |
+| Cost tracking           | Not supported | Per-model cost derived from token counts is not computed; backends that support it (e.g., Langfuse) derive cost server-side |
 
 ---
 
