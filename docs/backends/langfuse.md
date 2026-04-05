@@ -63,19 +63,26 @@ The instrumentation scope name in `scopeSpans[].scope.name` **must be exactly `'
 
 Token counts are mapped to the Generation `usage` field only when the instrumentation scope name is `'ai'` and the correct attribute keys are used.
 
-| Attribute key                    | Langfuse `usage` field                   | Applies to scope                   |
-| -------------------------------- | ---------------------------------------- | ---------------------------------- |
-| `gen_ai.usage.input_tokens`      | `usage.input` (prompt tokens)            | `'ai'` scope and all other scopes  |
-| `gen_ai.usage.output_tokens`     | `usage.output` (completion tokens)       | `'ai'` scope and all other scopes  |
-| `gen_ai.usage.prompt_tokens`     | `usage.input` (backward compat)          | `'ai'` scope and all other scopes  |
-| `gen_ai.usage.completion_tokens` | `usage.output` (backward compat)         | `'ai'` scope and all other scopes  |
-| `ai.usage.tokens`                | `usage.total`                            | `'ai'` scope only                  |
-| `ai.usage.cachedInputTokens`     | `usage.cachedInputTokens`                | `'ai'` scope only                  |
-| `ai.usage.reasoningTokens`       | `usage.reasoningTokens`                  | `'ai'` scope only (Langfuse v3.x+) |
-| `ai.usage.promptTokens`          | **not mapped** — stored in metadata only | —                                  |
-| `ai.usage.completionTokens`      | **not mapped** — stored in metadata only | —                                  |
+**Recommended keys** — new implementations should use these:
 
-`ai.usage.promptTokens` and `ai.usage.completionTokens` (camelCase keys emitted by AI SDK versions below 4.0) are **not** read by Langfuse's structured token path. They are stored in the observation's raw metadata only and do not populate the `usage` fields visible in the Langfuse UI. Use `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens` for all structured token reporting.
+| Attribute key                    | Langfuse `usage` field             | Applies to scope                   |
+| -------------------------------- | ---------------------------------- | ---------------------------------- |
+| `gen_ai.usage.input_tokens`      | `usage.input` (prompt tokens)      | `'ai'` scope and all other scopes  |
+| `gen_ai.usage.output_tokens`     | `usage.output` (completion tokens) | `'ai'` scope and all other scopes  |
+| `gen_ai.usage.prompt_tokens`     | `usage.input` (backward compat)    | `'ai'` scope and all other scopes  |
+| `gen_ai.usage.completion_tokens` | `usage.output` (backward compat)   | `'ai'` scope and all other scopes  |
+| `ai.usage.tokens`                | `usage.total`                      | `'ai'` scope only                  |
+| `ai.usage.cachedInputTokens`     | `usage.cachedInputTokens`          | `'ai'` scope only                  |
+| `ai.usage.reasoningTokens`       | `usage.reasoningTokens`            | `'ai'` scope only (Langfuse v3.x+) |
+
+**Legacy keys (obsolete — do not emit in new code):**
+
+| Attribute key               | Langfuse behavior                        | Origin                              |
+| --------------------------- | ---------------------------------------- | ----------------------------------- |
+| `ai.usage.promptTokens`     | **not mapped** — stored in metadata only | AI SDK < 4.0 (camelCase convention) |
+| `ai.usage.completionTokens` | **not mapped** — stored in metadata only | AI SDK < 4.0 (camelCase convention) |
+
+These legacy camelCase keys are not read by Langfuse's structured token path. They appear in the observation's raw metadata only and do not populate the `usage` fields visible in the Langfuse UI. New implementations should always use `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens`.
 
 ---
 
