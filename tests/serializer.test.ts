@@ -90,6 +90,17 @@ describe("serializeSpans", () => {
 
       expect(otlpSpan.startTimeUnixNano).toBe("1700000000000000000");
     });
+
+    it("avoids MAX_SAFE_INTEGER overflow for large second values", () => {
+      // 9007199254 seconds * 1e9 would exceed Number.MAX_SAFE_INTEGER if done
+      // arithmetically; string concatenation must produce the correct result
+      const span = createMockSpan({ startTime: [9007199254, 999999999] });
+      const result = serializeSpans([span]);
+      const otlpSpan = result.resourceSpans[0].scopeSpans[0].spans[0];
+
+      expect(otlpSpan.startTimeUnixNano).toBe("9007199254999999999");
+      expect(typeof otlpSpan.startTimeUnixNano).toBe("string");
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -178,6 +189,18 @@ describe("serializeSpans", () => {
         { stringValue: "x" },
         { boolValue: true },
       ]);
+    });
+
+    it("maps null attribute value to { stringValue: 'null' } via fallback", () => {
+      // null is not a recognised OtlpAnyValue variant; the fallback coerces via String()
+      const span = createMockSpan({ attributes: { nullable: null } });
+      const result = serializeSpans([span]);
+      const attrs = result.resourceSpans[0].scopeSpans[0].spans[0].attributes;
+
+      expect(attrs).toContainEqual({
+        key: "nullable",
+        value: { stringValue: "null" },
+      });
     });
   });
 
@@ -509,6 +532,39 @@ describe("serializeSpans", () => {
       expect(Object.prototype.hasOwnProperty.call(scope, "version")).toBe(
         false,
       );
+    });
+
+    it("omits scope version when empty string", () => {
+      const span = createMockSpan({
+        instrumentationScope: { name: "ai", version: "" },
+      });
+      const result = serializeSpans([span]);
+      const scope = result.resourceSpans[0].scopeSpans[0].scope;
+
+      expect(Object.prototype.hasOwnProperty.call(scope, "version")).toBe(
+        false,
+      );
+    });
+
+    it("serializes resource attributes as OtlpKeyValue[]", () => {
+      const span = createMockSpan({
+        resource: {
+          attributes: { "service.name": "svc", "service.version": 3 },
+          merge: () => null,
+          getRawAttributes: () => [],
+        },
+      });
+      const result = serializeSpans([span]);
+      const resourceAttrs = result.resourceSpans[0].resource.attributes;
+
+      expect(resourceAttrs).toContainEqual({
+        key: "service.name",
+        value: { stringValue: "svc" },
+      });
+      expect(resourceAttrs).toContainEqual({
+        key: "service.version",
+        value: { intValue: "3" },
+      });
     });
   });
 

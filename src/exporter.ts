@@ -34,7 +34,7 @@ export class OtlpHttpJsonExporter implements SpanExporter {
 
     try {
       const body = JSON.stringify(serializeSpans(spans));
-      await fetch(this.endpoint, {
+      const response = await fetch(this.endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -42,6 +42,13 @@ export class OtlpHttpJsonExporter implements SpanExporter {
         },
         body,
       });
+      if (!response.ok) {
+        console.warn(
+          "@aotoki/edge-otel: span export failed",
+          response.status,
+          response.statusText,
+        );
+      }
     } catch (error) {
       console.warn("@aotoki/edge-otel: span export failed", error);
     }

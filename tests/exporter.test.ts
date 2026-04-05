@@ -301,6 +301,77 @@ describe("OtlpHttpJsonExporter", () => {
       warnSpy.mockRestore();
     });
 
+    it("calls console.warn when fetch returns non-2xx response (e.g., 500)", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue({
+            ok: false,
+            status: 500,
+            statusText: "Internal Server Error",
+          } as Response),
+      );
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const exporter = new OtlpHttpJsonExporter({ endpoint: DEFAULT_ENDPOINT });
+      exporter.export([createMockSpan()], () => {});
+      await exporter.forceFlush();
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        "@aotoki/edge-otel: span export failed",
+        500,
+        "Internal Server Error",
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it("calls console.warn when fetch returns 401 unauthorized", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue({
+            ok: false,
+            status: 401,
+            statusText: "Unauthorized",
+          } as Response),
+      );
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const exporter = new OtlpHttpJsonExporter({ endpoint: DEFAULT_ENDPOINT });
+      exporter.export([createMockSpan()], () => {});
+      await exporter.forceFlush();
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        "@aotoki/edge-otel: span export failed",
+        401,
+        "Unauthorized",
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it("resolves (never rejects) when fetch returns non-2xx response", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue({
+            ok: false,
+            status: 500,
+            statusText: "Internal Server Error",
+          } as Response),
+      );
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const exporter = new OtlpHttpJsonExporter({ endpoint: DEFAULT_ENDPOINT });
+      exporter.export([createMockSpan()], () => {});
+
+      await expect(exporter.forceFlush()).resolves.toBeUndefined();
+    });
+
     it("drops spans from a failed flush (buffer is empty after failed flush)", async () => {
       const fetchStub = vi
         .fn()
