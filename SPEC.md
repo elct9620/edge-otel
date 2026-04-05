@@ -118,9 +118,9 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 
 |             |                                                                                                                                                                                                                                 |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Context** | A developer has one `generateText` or `streamText` call per Worker request handler and wants it to appear as a trace in Langfuse.                                                                                               |
-| **Action**  | The developer configures the provider with Langfuse credentials, passes the resulting tracer to `experimental_telemetry.tracer` on the AI SDK call, and registers the flush with `ctx.waitUntil` before returning the response. |
-| **Outcome** | A single Langfuse trace appears containing the AI SDK span tree (`ai.generateText`, `ai.generateText.doGenerate`) with correct timestamps, token usage, and model attributes.                                                   |
+| **Context** | A developer has one `generateText` or `streamText` call per Worker request handler and wants it to appear as a trace in the configured collector.                                                                                               |
+| **Action**  | The developer configures the provider with the collector endpoint and credentials, passes the resulting tracer to `experimental_telemetry.tracer` on the AI SDK call, and registers the flush with `ctx.waitUntil` before returning the response. |
+| **Outcome** | A single trace appears in the configured collector containing the AI SDK span tree (`ai.generateText`, `ai.generateText.doGenerate`) with correct timestamps, token usage, and model attributes.                                                   |
 
 ---
 
@@ -128,9 +128,9 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 
 |             |                                                                                                                                                                                                                                                                                                                |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Context** | A developer makes multiple sequential `generateText` or `streamText` calls within one request (for example, summarise → translate → format) and wants all calls to appear as one Langfuse trace rather than separate unrelated traces.                                                                         |
+| **Context** | A developer makes multiple sequential `generateText` or `streamText` calls within one request (for example, summarise → translate → format) and wants all calls to appear as one trace rather than separate unrelated traces.                                                                         |
 | **Action**  | The developer enables the `nodejs_compat` compatibility flag, uses the Hono middleware (or a plain Cloudflare Workers fetch handler with the same root-span pattern) to create a root span and activate it as the request context, then passes the tracer to each AI SDK call within the same request handler. |
-| **Outcome** | All AI SDK spans from the request share a single `traceId` and appear as sibling children under the root span in one Langfuse trace; token usage is rolled up across all calls.                                                                                                                                |
+| **Outcome** | All AI SDK spans from the request share a single `traceId` and appear as sibling children under the root span in one trace in the collector.                                                                                                                                |
 
 ---
 
@@ -138,9 +138,9 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 
 |             |                                                                                                                                                                                           |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Context** | A developer wants RAG retrieval steps, database queries, or other application-level operations to appear as spans in the same Langfuse trace as the AI SDK calls.                         |
+| **Context** | A developer wants RAG retrieval steps, database queries, or other application-level operations to appear as spans in the same trace as the AI SDK calls.                         |
 | **Action**  | The developer uses the tracer returned by the provider factory to create manual spans for the custom operations, keeping them within the same active request context as the AI SDK calls. |
-| **Outcome** | Custom spans appear as siblings alongside the AI SDK spans under the same root trace in Langfuse, giving a complete end-to-end view of the request.                                       |
+| **Outcome** | Custom spans appear as siblings alongside the AI SDK spans under the same root trace in the collector, giving a complete end-to-end view of the request.                                       |
 
 ---
 
@@ -150,7 +150,7 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Context** | An AI SDK call throws an exception — such as an API authentication error, rate limit response, or network timeout — during request processing.                               |
 | **Action**  | No manual action is required; the AI SDK records the exception on the span and sets the span status to ERROR before re-throwing.                                             |
-| **Outcome** | The span appears in Langfuse as `level = "ERROR"` with the exception type, message, and stack trace recorded as a span event; the trace-level severity is also marked ERROR. |
+| **Outcome** | The span is marked ERROR with the exception type, message, and stack trace recorded as a span event; the error observation is visible in the collector. |
 
 ---
 
@@ -159,8 +159,8 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 |             |                                                                                                                                                                                                                         |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Context** | An AI SDK call returns successfully (no exception thrown) but `finishReason` is `"error"` or `"content-filter"`, indicating the generation was not completed as expected.                                               |
-| **Action**  | After the AI SDK call returns, the developer inspects `finishReason` and sets the Langfuse-specific `langfuse.observation.level` attribute to `"WARNING"` on the active span, along with an explanatory status message. |
-| **Outcome** | The observation appears in Langfuse as `level = "WARNING"` with the status message, making the soft failure visible without marking the span as a hard error in other OTel backends.                                    |
+| **Action**  | After the AI SDK call returns, the developer inspects `finishReason` and sets the span status or backend-specific attributes to signal the soft failure. |
+| **Outcome** | The span status reflects the soft failure and the observation is visible in the collector. Backend-specific signaling (e.g., `langfuse.observation.level`) is documented in the backend integration guide.                                    |
 
 ---
 
@@ -178,9 +178,9 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 
 |             |                                                                                                                                                                                                     |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Context** | A developer cannot enable the `nodejs_compat` flag (due to policy or binary size constraints) but still wants multiple AI SDK calls within one request to share a single trace in Langfuse.         |
+| **Context** | A developer cannot enable the `nodejs_compat` flag (due to policy or binary size constraints) but still wants multiple AI SDK calls within one request to share a single trace.         |
 | **Action**  | The developer creates a root span manually and wraps each AI SDK call individually in an explicit `context.with()` call that sets the root span as the active context immediately before each call. |
-| **Outcome** | All AI SDK calls inherit the root span's `traceId` via manual context threading and appear as children under the same Langfuse trace, without requiring `AsyncLocalStorage`.                        |
+| **Outcome** | All AI SDK calls inherit the root span's `traceId` via manual context threading and appear as children under the same trace in the collector, without requiring `AsyncLocalStorage`.                        |
 
 ---
 
