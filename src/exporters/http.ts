@@ -1,7 +1,7 @@
 import type { SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
-import type { ExporterConfig } from "./types.js";
-import { serializeSpans } from "./serializer.js";
+import type { ExporterConfig } from "../types.js";
+import { serializeSpans } from "../serializer.js";
 
 export class OtlpHttpJsonExporter implements SpanExporter {
   private readonly endpoint: string;

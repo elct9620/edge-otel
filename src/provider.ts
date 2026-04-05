@@ -4,7 +4,7 @@ import {
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { resourceFromAttributes } from "@opentelemetry/resources";
-import { OtlpHttpJsonExporter } from "./exporter.js";
+import { OtlpHttpJsonExporter } from "./exporters/http.js";
 import type { TracerProviderOptions, TracerHandle } from "./types.js";
 
 const INSTRUMENTATION_SCOPE_NAME = "ai";

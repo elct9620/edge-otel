@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { ExportResultCode } from "@opentelemetry/core";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
-import { OtlpHttpJsonExporter } from "../src/exporter.js";
+import { OtlpHttpJsonExporter } from "../src/exporters/http.js";
 
 // ---------------------------------------------------------------------------
 // Mock factory
@@ -304,13 +304,11 @@ describe("OtlpHttpJsonExporter", () => {
     it("calls console.warn when fetch returns non-2xx response (e.g., 500)", async () => {
       vi.stubGlobal(
         "fetch",
-        vi
-          .fn()
-          .mockResolvedValue({
-            ok: false,
-            status: 500,
-            statusText: "Internal Server Error",
-          } as Response),
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 500,
+          statusText: "Internal Server Error",
+        } as Response),
       );
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -330,13 +328,11 @@ describe("OtlpHttpJsonExporter", () => {
     it("calls console.warn when fetch returns 401 unauthorized", async () => {
       vi.stubGlobal(
         "fetch",
-        vi
-          .fn()
-          .mockResolvedValue({
-            ok: false,
-            status: 401,
-            statusText: "Unauthorized",
-          } as Response),
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 401,
+          statusText: "Unauthorized",
+        } as Response),
       );
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -356,13 +352,11 @@ describe("OtlpHttpJsonExporter", () => {
     it("resolves (never rejects) when fetch returns non-2xx response", async () => {
       vi.stubGlobal(
         "fetch",
-        vi
-          .fn()
-          .mockResolvedValue({
-            ok: false,
-            status: 500,
-            statusText: "Internal Server Error",
-          } as Response),
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 500,
+          statusText: "Internal Server Error",
+        } as Response),
       );
       vi.spyOn(console, "warn").mockImplementation(() => {});
 
