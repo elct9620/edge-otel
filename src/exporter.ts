@@ -42,8 +42,8 @@ export class OtlpHttpJsonExporter implements SpanExporter {
         },
         body,
       });
-    } catch {
-      // Export errors are logged and spans are dropped; flush never rejects
+    } catch (error) {
+      console.warn("@aotoki/edge-otel: span export failed", error);
     }
   }
 

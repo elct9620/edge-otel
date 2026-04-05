@@ -1,3 +1,5 @@
+import "./context.js";
+
 export { createTracerProvider } from "./provider.js";
 export { OtlpHttpJsonExporter } from "./exporter.js";
 export type {

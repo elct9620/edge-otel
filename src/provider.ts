@@ -6,7 +6,6 @@ import {
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { OtlpHttpJsonExporter } from "./exporter.js";
 import type { TracerProviderOptions, TracerHandle } from "./types.js";
-import "./context.js";
 
 const INSTRUMENTATION_SCOPE_NAME = "ai";
 const DEFAULT_SERVICE_NAME = "cloudflare-worker";
@@ -32,13 +31,7 @@ export function createTracerProvider(
 
   return {
     tracer,
-    flush: async () => {
-      try {
-        await exporter.forceFlush();
-      } catch {
-        // flush always resolves; never rejects
-      }
-    },
+    flush: () => exporter.forceFlush(),
     rootSpan: (name, attributes) => {
       const span = tracer.startSpan(name, { attributes });
       const ctx = trace.setSpan(context.active(), span);
