@@ -57,7 +57,20 @@ The ordering of operations is a correctness requirement, not a style preference.
 | Response is a non-streaming `generateText` result | Flush is registered immediately after the handler returns, before the response is sent. All AI SDK spans have already ended when the handler returns.                                                                                                                                                                                                                                                                                    |
 | Response is a `streamText` result                 | The AI SDK ends the streaming spans (`ai.streamText`, `ai.streamText.doStream`) only after the response stream is fully consumed by the client. The AI SDK result exposes a `consumedStream` promise that resolves when the stream is fully consumed. Flush must be chained after `consumedStream` resolves. If flush fires before `consumedStream` resolves, the streaming spans have not yet ended and will be absent from the export. |
 
-When the handler returns a streaming response, the middleware chains the flush after `consumedStream` resolves rather than immediately in the unconditional cleanup phase. This ensures all streaming spans, including token usage and finish reason, are present in the buffer before the flush POST is made.
+### Deferred Flush Registration
+
+The middleware cannot detect whether a handler's response is streaming or non-streaming from the `Response` object alone. The AI SDK's `consumedStream` promise lives on the AI SDK result object, which only the handler has access to.
+
+To support streaming responses, the middleware exposes a **deferred flush registration mechanism**: the handler registers a promise that the middleware must await before flushing. The middleware observes the following rule:
+
+| Deferred promise state | Flush behavior                                                                                           |
+| ---------------------- | -------------------------------------------------------------------------------------------------------- |
+| No promise registered  | Flush fires immediately in the unconditional cleanup phase (normal `generateText` path)                  |
+| Promise registered     | Flush is chained after the registered promise resolves: `waitUntil(deferredPromise.then(() => flush()))` |
+
+The handler is responsible for registering the AI SDK's `consumedStream` promise (e.g., `result.consumedStream`) via the mechanism exposed by the middleware. If the handler omits registration for a streaming response, the middleware flushes immediately and streaming spans are lost — this is an application-level error, not a middleware failure.
+
+This ensures all streaming spans, including token usage and finish reason, are present in the buffer before the flush POST is made.
 
 ---
 

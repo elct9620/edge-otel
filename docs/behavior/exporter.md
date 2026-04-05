@@ -16,6 +16,8 @@ The exporter accumulates spans in memory during a request and exports them to an
 
 **Atomicity of flush**: the buffer is fully drained before the POST begins. If `forceFlush()` is called while the buffer is empty, the operation is a no-op and resolves immediately.
 
+**Concurrent calls**: if multiple `forceFlush()` calls overlap, each call atomically drains whatever spans are in the buffer at call time. The atomic drain (e.g., `splice(0)`) ensures no span is exported twice and no span is lost. In practice, the design expects one `flush()` call per request; concurrent calls are safe but not the intended usage pattern.
+
 **No retry**: `forceFlush()` makes exactly one POST attempt per flush cycle. Failed spans are dropped.
 
 ---

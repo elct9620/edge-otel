@@ -79,7 +79,7 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 
 | #   | Feature                                                                                                                          |
 | --- | -------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | OTLP/HTTP JSON span exporter using only Web Platform APIs (`fetch`, `btoa`, `crypto`) — no Node.js built-ins required            |
+| 1   | OTLP/HTTP JSON span exporter using only Web Platform APIs (`fetch`, `btoa`) — no Node.js built-ins required                      |
 | 2   | OTLP/HTTP + JSON span exporter targeting any compatible collector; Langfuse is a supported backend with a provided preset        |
 | 3   | `SimpleSpanProcessor` for per-span buffering with explicit flush via `forceFlush()` — no background timer dependency             |
 | 4   | `AsyncLocalStorage`-based context propagation that groups all AI SDK calls within a single request under one trace               |
