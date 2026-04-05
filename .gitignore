@@ -145,3 +145,4 @@ vite.config.ts.timestamp-*
 
 # Temporary folders
 tmp/
+*.local.md
