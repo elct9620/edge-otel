@@ -111,4 +111,76 @@ Developers building AI-powered applications on Cloudflare Workers with the Verce
 | `@opentelemetry/resources`           | `Resource` descriptor carrying `service.name` and `telemetry.sdk.*` attributes                                                                                        |
 | `@opentelemetry/context-async-hooks` | `AsyncLocalStorageContextManager` for context propagation across `await` boundaries — requires `nodejs_compat` flag; optional for single-call-per-request deployments |
 
+### User Journeys
+
+**Journey 1: Single AI SDK call per request**
+
+|             |                                                                                                                                                                                                                                 |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Context** | A developer has one `generateText` or `streamText` call per Worker request handler and wants it to appear as a trace in Langfuse.                                                                                               |
+| **Action**  | The developer configures the provider with Langfuse credentials, passes the resulting tracer to `experimental_telemetry.tracer` on the AI SDK call, and registers the flush with `ctx.waitUntil` before returning the response. |
+| **Outcome** | A single Langfuse trace appears containing the AI SDK span tree (`ai.generateText`, `ai.generateText.doGenerate`) with correct timestamps, token usage, and model attributes.                                                   |
+
+---
+
+**Journey 2: Multiple AI SDK calls grouped under one trace**
+
+|             |                                                                                                                                                                                                                                                                                                                |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Context** | A developer makes multiple sequential `generateText` or `streamText` calls within one request (for example, summarise → translate → format) and wants all calls to appear as one Langfuse trace rather than separate unrelated traces.                                                                         |
+| **Action**  | The developer enables the `nodejs_compat` compatibility flag, uses the Hono middleware (or a plain Cloudflare Workers fetch handler with the same root-span pattern) to create a root span and activate it as the request context, then passes the tracer to each AI SDK call within the same request handler. |
+| **Outcome** | All AI SDK spans from the request share a single `traceId` and appear as sibling children under the root span in one Langfuse trace; token usage is rolled up across all calls.                                                                                                                                |
+
+---
+
+**Journey 3: Custom instrumentation alongside AI SDK calls**
+
+|             |                                                                                                                                                                                           |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Context** | A developer wants RAG retrieval steps, database queries, or other application-level operations to appear as spans in the same Langfuse trace as the AI SDK calls.                         |
+| **Action**  | The developer uses the tracer returned by the provider factory to create manual spans for the custom operations, keeping them within the same active request context as the AI SDK calls. |
+| **Outcome** | Custom spans appear as siblings alongside the AI SDK spans under the same root trace in Langfuse, giving a complete end-to-end view of the request.                                       |
+
+---
+
+**Journey 4: Automatic error observation**
+
+|             |                                                                                                                                                                              |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Context** | An AI SDK call throws an exception — such as an API authentication error, rate limit response, or network timeout — during request processing.                               |
+| **Action**  | No manual action is required; the AI SDK records the exception on the span and sets the span status to ERROR before re-throwing.                                             |
+| **Outcome** | The span appears in Langfuse as `level = "ERROR"` with the exception type, message, and stack trace recorded as a span event; the trace-level severity is also marked ERROR. |
+
+---
+
+**Journey 5: Soft error warning (manual)**
+
+|             |                                                                                                                                                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Context** | An AI SDK call returns successfully (no exception thrown) but `finishReason` is `"error"` or `"content-filter"`, indicating the generation was not completed as expected.                                               |
+| **Action**  | After the AI SDK call returns, the developer inspects `finishReason` and sets the Langfuse-specific `langfuse.observation.level` attribute to `"WARNING"` on the active span, along with an explanatory status message. |
+| **Outcome** | The observation appears in Langfuse as `level = "WARNING"` with the status message, making the soft failure visible without marking the span as a hard error in other OTel backends.                                    |
+
+---
+
+**Journey 6: Swapping the export backend**
+
+|             |                                                                                                                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Context** | A developer wants to send traces to a different OTLP-compatible collector — such as Grafana Tempo, Jaeger, Honeycomb, or a self-hosted OpenTelemetry Collector — instead of Langfuse. |
+| **Action**  | The developer changes the URL and authorization credentials in the provider constructor configuration; no other code changes are required.                                            |
+| **Outcome** | The same AI SDK spans are exported to the alternative collector using OTLP/HTTP JSON; the AI SDK integration layer, middleware, and context propagation are unaffected.               |
+
+---
+
+**Journey 7: Multi-call trace grouping without `nodejs_compat`**
+
+|             |                                                                                                                                                                                                     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Context** | A developer cannot enable the `nodejs_compat` flag (due to policy or binary size constraints) but still wants multiple AI SDK calls within one request to share a single trace in Langfuse.         |
+| **Action**  | The developer creates a root span manually and wraps each AI SDK call individually in an explicit `context.with()` call that sets the root span as the active context immediately before each call. |
+| **Outcome** | All AI SDK calls inherit the root span's `traceId` via manual context threading and appear as children under the same Langfuse trace, without requiring `AsyncLocalStorage`.                        |
+
+---
+
 <!-- Behavior and Refinement sections to follow -->
