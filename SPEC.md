@@ -839,4 +839,188 @@ Telemetry failures are fully isolated from the application. This is a correctnes
 
 Export error scenarios are fully specified in the OTLP Span Exporter — Error Scenarios table.
 
-<!-- Remaining Behavior and Refinement sections to follow -->
+## Refinement
+
+### Contracts & Types
+
+This section defines the public API surface, the TypeScript interfaces that implement that surface, the wire format types that the serializer and any future implementer must produce identically, and the key terms used throughout this specification.
+
+---
+
+#### Public API Surface
+
+The package exposes exactly the following identifiers at its public boundary. Internal types, helper functions, and the span processor wiring are not part of the public API.
+
+| Export                  | Kind      | Purpose                                                                                             |
+| ----------------------- | --------- | --------------------------------------------------------------------------------------------------- |
+| `createTracerProvider`  | Function  | Factory: accepts configuration and returns a `TracerHandle`                                         |
+| `TracerHandle`          | Interface | The object returned by the factory; consumed by application code                                    |
+| `TracerProviderOptions` | Interface | Configuration accepted by the factory; extends the exporter config with `serviceName`               |
+| `ExporterConfig`        | Interface | Credentials and endpoint configuration for the OTLP exporter                                        |
+| `LangfuseSpanExporter`  | Class     | The OTLP/HTTP JSON exporter; exported for advanced use (custom processor wiring, multiple backends) |
+| `createHonoMiddleware`  | Function  | Returns a Hono middleware function that manages root span lifecycle for a complete Hono request     |
+
+`LangfuseSpanExporter` is exported because implementers wiring multiple backends or a custom `SimpleSpanProcessor` need direct access to the exporter instance. It is not required for typical single-backend use.
+
+---
+
+#### Configuration Contract
+
+`ExporterConfig` captures the credentials and endpoint needed to POST to a Langfuse OTLP ingestion endpoint.
+
+| Field       | Type     | Required | Default                        | Description                                                                                                                                |
+| ----------- | -------- | -------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `publicKey` | `string` | Yes      | —                              | Langfuse project public key (format: `pk-lf-…`). Used as the Basic Auth username in every OTLP POST request.                               |
+| `secretKey` | `string` | Yes      | —                              | Langfuse project secret key (format: `sk-lf-…`). Used as the Basic Auth password.                                                          |
+| `baseUrl`   | `string` | No       | `'https://cloud.langfuse.com'` | Base URL of the Langfuse deployment. The path `/api/public/otel/v1/traces` is appended automatically. Accepts any OTLP/HTTP JSON endpoint. |
+
+`TracerProviderOptions` extends `ExporterConfig` with one additional field.
+
+| Field         | Type     | Required | Default               | Description                                                                              |
+| ------------- | -------- | -------- | --------------------- | ---------------------------------------------------------------------------------------- |
+| `serviceName` | `string` | No       | `'cloudflare-worker'` | Value of the `service.name` OTel resource attribute. Appears in Langfuse trace metadata. |
+
+TypeScript interface:
+
+```typescript
+interface ExporterConfig {
+  publicKey: string;
+  secretKey: string;
+  baseUrl?: string;
+}
+
+interface TracerProviderOptions extends ExporterConfig {
+  serviceName?: string;
+}
+```
+
+---
+
+#### Handle Contract
+
+`TracerHandle` is the object returned by `createTracerProvider`. It contains every member an application needs to instrument AI SDK calls, create custom spans, and flush completed spans after the HTTP response is sent.
+
+| Member     | Type                                                                                  | Purpose                                                                                                                                                                                            |
+| ---------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tracer`   | `Tracer` (from `@opentelemetry/api`)                                                  | Pass to `experimental_telemetry.tracer` on every AI SDK call. Never registered globally; used exclusively via this reference.                                                                      |
+| `flush`    | `() => Promise<void>`                                                                 | Drain the in-memory span buffer and POST all buffered spans to the configured endpoint. Register with `ctx.waitUntil(flush())` before returning the HTTP response. Always resolves; never rejects. |
+| `rootSpan` | `(name: string, attributes?: Record<string, string>) => { span: Span; ctx: Context }` | Create a named root span with optional attributes. Returns the span and a context with that span set as active. Pass the returned `ctx` to `context.with(ctx, handler)`.                           |
+
+TypeScript interface:
+
+```typescript
+interface TracerHandle {
+  tracer: Tracer;
+  flush: () => Promise<void>;
+  rootSpan: (
+    name: string,
+    attributes?: Record<string, string>,
+  ) => {
+    span: Span;
+    ctx: Context;
+  };
+}
+```
+
+`Tracer`, `Span`, and `Context` are from `@opentelemetry/api`. They are not redefined here; this package imports and re-uses the upstream types.
+
+---
+
+#### OTLP JSON Wire Format Types
+
+The following types define the JSON structure that the serializer must produce. Two implementers given the same `ReadableSpan[]` input must emit byte-identical JSON (up to key ordering). These types are wire format contracts, not internal data structures.
+
+**Attribute value wrapper** — every attribute value in OTLP JSON is wrapped in a typed envelope. Exactly one field is present per value.
+
+```typescript
+interface OtlpAnyValue {
+  stringValue?: string;
+  intValue?: string; // decimal string — preserves 64-bit integer precision
+  doubleValue?: number;
+  boolValue?: boolean;
+  arrayValue?: { values: OtlpAnyValue[] };
+  kvlistValue?: { values: OtlpKeyValue[] };
+}
+
+interface OtlpKeyValue {
+  key: string;
+  value: OtlpAnyValue;
+}
+```
+
+**Span event** — an occurrence recorded on a span (e.g., an exception).
+
+```typescript
+interface OtlpEvent {
+  name: string;
+  timeUnixNano: string; // nanosecond decimal string
+  attributes: OtlpKeyValue[];
+  droppedAttributesCount: number;
+}
+```
+
+**Span** — one unit of work.
+
+```typescript
+interface OtlpSpan {
+  traceId: string; // 32-char lowercase hex
+  spanId: string; // 16-char lowercase hex
+  parentSpanId?: string; // 16-char lowercase hex; omitted for root spans
+  name: string;
+  kind: number; // 1=INTERNAL 2=SERVER 3=CLIENT 4=PRODUCER 5=CONSUMER
+  startTimeUnixNano: string; // nanosecond decimal string
+  endTimeUnixNano: string; // nanosecond decimal string
+  attributes: OtlpKeyValue[];
+  events: OtlpEvent[];
+  status: { code: number; message?: string }; // 0=UNSET 1=OK 2=ERROR
+  droppedAttributesCount: number;
+  droppedEventsCount: number;
+  droppedLinksCount: number;
+}
+```
+
+**Grouping envelope** — spans are grouped by instrumentation scope, and scopes are grouped by resource.
+
+```typescript
+interface OtlpScopeSpans {
+  scope: { name: string; version?: string };
+  spans: OtlpSpan[];
+}
+
+interface OtlpResourceSpans {
+  resource: { attributes: OtlpKeyValue[] };
+  scopeSpans: OtlpScopeSpans[];
+}
+
+interface ExportTraceServiceRequest {
+  resourceSpans: OtlpResourceSpans[];
+}
+```
+
+**Encoding rules that affect correctness** (violations produce silent bad data, not errors):
+
+| Field               | Encoding rule                                                                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `traceId`           | Lowercase hex string, exactly 32 characters                                                                      |
+| `spanId`            | Lowercase hex string, exactly 16 characters                                                                      |
+| `parentSpanId`      | Omitted entirely for root spans — an empty string is incorrect and causes backend rejection                      |
+| `startTimeUnixNano` | Built by string concatenation: `"${seconds}${nanos.padStart(9, '0')}"` — arithmetic overflows `MAX_SAFE_INTEGER` |
+| `endTimeUnixNano`   | Same rule as `startTimeUnixNano`                                                                                 |
+| `intValue`          | Decimal string — token counts and other 64-bit counters may exceed `Number.MAX_SAFE_INTEGER`                     |
+| `scope.name`        | Must be exactly `'ai'` for AI SDK spans — Langfuse gates token-usage extraction on this value                    |
+
+---
+
+#### Terminology
+
+| Term                       | Definition                                                                                                                                                                                                                   |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Handle                     | The object returned by `createTracerProvider`; contains `tracer`, `flush`, and `rootSpan`. The application holds this object and uses it for every AI SDK call and flush registration within a request.                      |
+| Root span                  | The top-level span for a single request; created by the Hono middleware or by a direct call to `rootSpan(name, attributes?)`. All AI SDK spans within the request are parented under it and share its `traceId`.             |
+| Flush                      | The operation that drains the in-memory span buffer and exports all buffered spans to the OTLP endpoint in a single HTTP POST. Registered with `ctx.waitUntil()` to run after the HTTP response is sent.                     |
+| Generation                 | A Langfuse observation sub-type representing an LLM call. Carries structured fields for `model`, `modelParameters`, token `usage`, and `cost`. Classified by Langfuse from span name and instrumentation scope.              |
+| Instrumentation scope name | The string identifier passed to `provider.getTracer(name)` when obtaining a `Tracer`. Must be `'ai'` for AI SDK spans to trigger Langfuse's AI SDK token-usage extraction path.                                              |
+| OTLP/HTTP JSON             | The wire protocol used by this package: OpenTelemetry Protocol over HTTP, with the payload serialized as JSON. The alternative encoding (protobuf) is not used.                                                              |
+| `waitUntil`                | A Cloudflare Workers execution context API (`ctx.waitUntil(promise)`) that keeps the isolate alive until `promise` resolves, even after the HTTP response has been sent. Used to extend isolate lifetime for the flush POST. |
+| Cold start                 | The first execution of a Worker module in a new isolate instance. Module-level code (including `AsyncLocalStorageContextManager` registration) runs exactly once per cold start.                                             |
+| Warm isolate               | A Worker isolate reused across multiple requests in the same instance. Module-level state persists; per-request state must not persist between requests.                                                                     |
