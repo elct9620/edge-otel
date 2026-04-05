@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+
+# Package manager
+pnpm-lock.yaml
+
+# License
+LICENSE
