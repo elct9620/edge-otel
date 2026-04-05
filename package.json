@@ -1,18 +1,45 @@
 {
   "name": "@aotoki/edge-otel",
   "version": "0.1.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Lightweight OpenTelemetry SDK for V8 isolate edge runtimes",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsdown",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
-  "keywords": [],
+  "keywords": [
+    "opentelemetry",
+    "edge",
+    "cloudflare-workers",
+    "tracing"
+  ],
   "author": "Aotokitsuruya",
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.28.0",
   "devDependencies": {
-    "prettier": "^3.8.1"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.2.0",
+    "jiti": "^2.6.1",
+    "prettier": "^3.8.1",
+    "tsdown": "^0.21.7",
+    "typescript": "^6.0.2",
+    "typescript-eslint": "^8.58.0",
+    "vitest": "^4.1.2"
   }
 }
