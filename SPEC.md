@@ -104,12 +104,12 @@ Developers building AI-powered applications on Cloudflare Workers with the Verce
 
 ### Dependencies
 
-| Package                              | Role                                                                                                                                                                  |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@opentelemetry/api`                 | Core OTel interfaces: `Tracer`, `Span`, `SpanKind`, `SpanStatusCode`, `context`, `trace`                                                                              |
-| `@opentelemetry/sdk-trace-base`      | Runtime-agnostic tracing primitives: `BasicTracerProvider`, `SimpleSpanProcessor`, `ReadableSpan`, `SpanExporter`                                                     |
-| `@opentelemetry/resources`           | `Resource` descriptor carrying `service.name` and `telemetry.sdk.*` attributes                                                                                        |
-| `@opentelemetry/context-async-hooks` | `AsyncLocalStorageContextManager` for context propagation across `await` boundaries — requires `nodejs_compat` flag; optional for single-call-per-request deployments |
+| Package                              | Role                                                                                                                                                      |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@opentelemetry/api`                 | Core OTel interfaces: `Tracer`, `Span`, `SpanKind`, `SpanStatusCode`, `context`, `trace`                                                                  |
+| `@opentelemetry/sdk-trace-base`      | Runtime-agnostic tracing primitives: `BasicTracerProvider`, `SimpleSpanProcessor`, `ReadableSpan`, `SpanExporter`                                         |
+| `@opentelemetry/resources`           | `Resource` descriptor carrying `service.name` and `telemetry.sdk.*` attributes                                                                            |
+| `@opentelemetry/context-async-hooks` | `AsyncLocalStorageContextManager` for context propagation across `await` boundaries — requires `nodejs_compat` flag; the Worker will not start without it |
 
 ### User Journeys
 
@@ -262,6 +262,122 @@ The request body is an `ExportTraceServiceRequest` object. Spans are grouped by 
 | Buffer is empty when `forceFlush()` is called | Resolve immediately; no POST is made                                     |
 
 In all failure cases `forceFlush()` resolves (does not reject), preserving the `ctx.waitUntil()` promise chain.
+
+---
+
+### Tracer Provider Factory
+
+The factory accepts configuration, wires internal components together, and returns a handle that the application uses to instrument AI SDK calls, create custom spans, and flush completed spans after the HTTP response is sent. The factory does not validate credentials at construction time — credential errors surface as HTTP 401 responses during `flush()`.
+
+---
+
+#### Factory Output — Handle
+
+The factory returns a handle with three members. All three are required for a complete integration.
+
+| Member     | Type                                                                                  | Contract                                                                                                                                                                                                                                        |
+| ---------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tracer`   | `Tracer`                                                                              | Passed directly to `experimental_telemetry.tracer` on every AI SDK call. Never registered globally.                                                                                                                                             |
+| `flush`    | `() => Promise<void>`                                                                 | Drains the in-memory span buffer and exports all buffered spans to the configured endpoint. Must be registered with `ctx.waitUntil(flush())` before the HTTP response is sent. Always resolves; never rejects.                                  |
+| `rootSpan` | `(name: string, attributes?: Record<string, string>) => { span: Span; ctx: Context }` | Creates a named span with optional attributes and returns both the span and a context object with that span set as active. The caller passes the returned `ctx` to `context.with(ctx, handler)` to activate it for the duration of the request. |
+
+---
+
+#### Global Registration Avoidance
+
+The factory does **not** call `provider.register()`.
+
+The tracer is passed directly to each AI SDK call via `experimental_telemetry.tracer`. Registering the provider as the global OTel singleton is unnecessary and carries two risks in V8 isolate runtimes:
+
+| Risk                                             | Consequence                                                                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| Polluting the global OTel singleton              | Other OTel users in the same module scope observe unexpected state                               |
+| State leakage across requests sharing an isolate | A provider created for one request's credentials could intercept spans from a subsequent request |
+
+---
+
+#### Instrumentation Scope Name
+
+The tracer is obtained with the instrumentation scope name `'ai'`.
+
+This value is **not a label** — it is a functional requirement. Langfuse's ingestion processor gates its AI SDK token-usage processing path on `instrumentationScopeName === 'ai'`. Any other scope name routes token counts through the generic OTel path, which silently omits AI SDK-specific token fields from Langfuse's structured usage data.
+
+---
+
+#### Span Processor Wiring
+
+| Processor             | Behavior                                                                                                                        |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `SimpleSpanProcessor` | Calls `exporter.export()` synchronously on each `span.end()`. No batch window, no background timer. One processor per exporter. |
+
+`BatchSpanProcessor` is not used. It depends on a recurring background timer that does not survive isolate shutdown, causing spans to be silently dropped.
+
+---
+
+#### Resource Attributes
+
+Every span exported by the provider carries the following resource attributes.
+
+| Attribute                | Source                        | Notes                                                                  |
+| ------------------------ | ----------------------------- | ---------------------------------------------------------------------- |
+| `service.name`           | Configuration (`serviceName`) | Defaults to `'cloudflare-worker'`. Appears in Langfuse trace metadata. |
+| `telemetry.sdk.name`     | OTel SDK                      | Populated automatically by the SDK.                                    |
+| `telemetry.sdk.language` | OTel SDK                      | Populated automatically by the SDK.                                    |
+| `telemetry.sdk.version`  | OTel SDK                      | Populated automatically by the SDK.                                    |
+
+---
+
+#### Context Manager Registration
+
+The `@opentelemetry/context-async-hooks` package is an unconditional dependency. It is imported and the `AsyncLocalStorageContextManager` is registered at **module scope** — before any request handler fires. This means the `nodejs_compat` compatibility flag (or equivalent runtime support for `AsyncLocalStorage`) is a prerequisite for deploying with this package. Without `nodejs_compat`, the module-level import fails and the Worker does not start.
+
+| Timing                             | Behavior                                                                                                                     |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Module load (cold start)           | `AsyncLocalStorageContextManager` is enabled and set as the global context manager. Runs exactly once per isolate lifetime.  |
+| Subsequent requests (warm isolate) | Registration is already in place; no re-registration occurs.                                                                 |
+| `nodejs_compat` absent             | Module import fails at load time; the Worker does not start. This is a deployment-time error, not a silent runtime fallback. |
+
+Registration must occur at module scope, not inside a request handler or the factory body. Placing it inside per-request code means it runs after the first span may already have been created, and context propagation would be unreliable for that request.
+
+For deployments that cannot enable `nodejs_compat`, context propagation is unavailable through this package. Single AI SDK calls per request still produce correct traces (each call gets its own trace), but multi-call grouping under one trace requires manual `context.with()` threading, which is outside the scope of this factory.
+
+---
+
+#### Root-Span Helper
+
+The `rootSpan(name, attributes?)` helper creates a named span and activates it as the current context.
+
+| Step                  | Observable behavior                                                                                                                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Call `rootSpan(name)` | A new span is started with the given name and any provided attributes.                                                                                                                          |
+| Returned `span`       | The caller is responsible for calling `span.end()` after the request completes, in a `finally` block.                                                                                           |
+| Returned `ctx`        | An OTel `Context` object with the new span set as the active span.                                                                                                                              |
+| Caller wraps handler  | `context.with(ctx, handler)` activates the context for the duration of `handler`. All AI SDK calls and `tracer.startActiveSpan()` calls inside `handler` inherit the root span as their parent. |
+
+The root-span helper is designed for Hono middleware and plain Worker fetch handlers that need to parent all AI SDK spans under a single per-request root span.
+
+---
+
+#### Configuration
+
+| Option        | Required | Default                      | Description                                                                                                                                                                                                                                                |
+| ------------- | -------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `publicKey`   | Yes      | —                            | Langfuse project public key. Used as the Basic Auth username in the `Authorization` header sent to the OTLP endpoint.                                                                                                                                      |
+| `secretKey`   | Yes      | —                            | Langfuse project secret key. Used as the Basic Auth password.                                                                                                                                                                                              |
+| `baseUrl`     | No       | `https://cloud.langfuse.com` | Base URL of the OTLP endpoint. Use `https://us.cloud.langfuse.com` for the US region, `https://hipaa.cloud.langfuse.com` for the HIPAA region, or a self-hosted domain. The endpoint path `{baseUrl}/api/public/otel/v1/traces` is appended automatically. |
+| `serviceName` | No       | `'cloudflare-worker'`        | Value of the `service.name` resource attribute. Appears in Langfuse trace metadata.                                                                                                                                                                        |
+
+---
+
+#### Error Scenarios
+
+| Scenario                                                 | Factory behavior                                                                                                                         |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `publicKey` is absent or empty                           | The factory produces a handle, but every `forceFlush()` call results in an HTTP 401 response; spans are dropped and a warning is logged. |
+| `secretKey` is absent or empty                           | Same as above.                                                                                                                           |
+| `baseUrl` is malformed                                   | `flush()` rejects the `fetch()` call; the error is caught, a warning is logged, and spans are dropped. `flush()` still resolves.         |
+| `rootSpan()` called before context manager is registered | The span is created without an active parent; it becomes a root span as expected. No error is thrown.                                    |
+| `flush()` called with an empty buffer                    | Resolves immediately; no HTTP request is made.                                                                                           |
 
 ---
 
