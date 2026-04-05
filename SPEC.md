@@ -77,29 +77,29 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 
 ### Feature List
 
-| #   | Feature                                                                                                                          |
-| --- | -------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | OTLP/HTTP JSON span exporter using only Web Platform APIs (`fetch`, `btoa`, `crypto`) — no Node.js built-ins required            |
-| 2   | Langfuse as the default backend, with any OTLP/HTTP + JSON-compatible backend selectable via constructor configuration           |
-| 3   | `SimpleSpanProcessor` for per-span buffering with explicit flush via `forceFlush()` — no background timer dependency             |
-| 4   | `AsyncLocalStorage`-based context propagation that groups all AI SDK calls within a single request under one trace               |
-| 5   | Automatic error tracking: thrown exceptions are recorded as span events and marked `ERROR` status without manual instrumentation |
-| 6   | Manual span creation via the standard OTel `Tracer` API for custom instrumentation (RAG retrieval, database queries, etc.)       |
-| 7   | Hono middleware for root span lifecycle management: span creation, context activation, error capture, and flush registration     |
+| #   | Feature                                                                                                                                 |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | OTLP/HTTP JSON span exporter using only Web Platform APIs (`fetch`, `btoa`, `crypto`) — no Node.js built-ins required                   |
+| 2   | OTLP/HTTP + JSON span exporter targeting any compatible collector; Langfuse is a supported backend with dedicated configuration helpers |
+| 3   | `SimpleSpanProcessor` for per-span buffering with explicit flush via `forceFlush()` — no background timer dependency                    |
+| 4   | `AsyncLocalStorage`-based context propagation that groups all AI SDK calls within a single request under one trace                      |
+| 5   | Automatic error tracking: thrown exceptions are recorded as span events and marked `ERROR` status without manual instrumentation        |
+| 6   | Manual span creation via the standard OTel `Tracer` API for custom instrumentation (RAG retrieval, database queries, etc.)              |
+| 7   | Hono middleware for root span lifecycle management: span creation, context activation, error capture, and flush registration            |
 
 ---
 
 ### IS / IS NOT
 
-| IS                                                                                                         | IS NOT                                                                                                        |
-| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| A standard OTel `SpanExporter` implementation on top of `sdk-trace-base`                                   | A full OTel SDK reimplementation from scratch                                                                 |
-| Cloudflare Workers as the primary target runtime, portable to Deno Deploy and Vercel Edge by design        | Node.js server support (`@langfuse/otel` + `@opentelemetry/sdk-node` already handles that)                    |
-| Langfuse as the default backend, any OTLP/HTTP + JSON collector as an alternative                          | gRPC or protobuf transport support                                                                            |
-| `AsyncLocalStorage`-based context propagation for multi-call trace merging (requires `nodejs_compat` flag) | Automatic propagation without the `nodejs_compat` flag                                                        |
-| Automatic `ERROR` status when exceptions are thrown by AI SDK calls                                        | Automatic `WARNING` status for soft failures (`finishReason = "error"`) — that remains manual                 |
-| Manual spans via the standard OTel `Tracer` API                                                            | Auto-instrumentation of Cloudflare bindings (KV, D1, Durable Objects)                                         |
-| Minimal dependency surface: 4 OTel packages only                                                           | Dependency on `@opentelemetry/sdk-node`, `@langfuse/otel`, `langfuse-vercel`, or `@microlabs/otel-cf-workers` |
+| IS                                                                                                                         | IS NOT                                                                                                        |
+| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| A standard OTel `SpanExporter` implementation on top of `sdk-trace-base`                                                   | A full OTel SDK reimplementation from scratch                                                                 |
+| Cloudflare Workers as the primary target runtime, portable to Deno Deploy and Vercel Edge by design                        | Node.js server support (`@langfuse/otel` + `@opentelemetry/sdk-node` already handles that)                    |
+| Any OTLP/HTTP + JSON collector as the export target; Langfuse is one supported backend with dedicated integration guidance | gRPC or protobuf transport support                                                                            |
+| `AsyncLocalStorage`-based context propagation for multi-call trace merging (requires `nodejs_compat` flag)                 | Automatic propagation without the `nodejs_compat` flag                                                        |
+| Automatic `ERROR` status when exceptions are thrown by AI SDK calls                                                        | Automatic `WARNING` status for soft failures (`finishReason = "error"`) — that remains manual                 |
+| Manual spans via the standard OTel `Tracer` API                                                                            | Auto-instrumentation of Cloudflare bindings (KV, D1, Durable Objects)                                         |
+| Minimal dependency surface: 4 OTel packages only                                                                           | Dependency on `@opentelemetry/sdk-node`, `@langfuse/otel`, `langfuse-vercel`, or `@microlabs/otel-cf-workers` |
 
 ---
 
