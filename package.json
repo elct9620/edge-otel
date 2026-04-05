@@ -9,6 +9,26 @@
         "types": "./dist/index.d.mts",
         "default": "./dist/index.mjs"
       }
+    },
+    "./middleware/hono": {
+      "import": {
+        "types": "./dist/middleware/hono.d.mts",
+        "default": "./dist/middleware/hono.mjs"
+      }
+    },
+    "./exporters/langfuse": {
+      "import": {
+        "types": "./dist/exporters/langfuse.d.mts",
+        "default": "./dist/exporters/langfuse.mjs"
+      }
+    }
+  },
+  "peerDependencies": {
+    "hono": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "hono": {
+      "optional": true
     }
   },
   "files": [
@@ -35,11 +55,19 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.2.0",
+    "hono": "^4.12.10",
     "jiti": "^2.6.1",
     "prettier": "^3.8.1",
     "tsdown": "^0.21.7",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.58.0",
     "vitest": "^4.1.2"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/context-async-hooks": "^2.6.1",
+    "@opentelemetry/core": "^2.6.1",
+    "@opentelemetry/resources": "^2.6.1",
+    "@opentelemetry/sdk-trace-base": "^2.6.1"
   }
 }
