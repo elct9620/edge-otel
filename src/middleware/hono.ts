@@ -22,7 +22,16 @@ export function createHonoMiddleware(
 
       try {
         await next();
-        span.setStatus({ code: SpanStatusCode.OK });
+
+        if (c.error) {
+          span.recordException(c.error);
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: c.error.message,
+          });
+        } else {
+          span.setStatus({ code: SpanStatusCode.OK });
+        }
       } catch (error) {
         span.recordException(error as Error);
         span.setStatus({
