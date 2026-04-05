@@ -28,24 +28,38 @@ This is a **specification-driven** project. Read the specs before implementing:
 - `docs/contracts.md` — Public API surface, type contracts, wire format, 10 correctness rules
 - `docs/behavior/` — Detailed behavior specs (provider, exporter, middleware, context, error-handling)
 - `docs/backends/` — Backend-specific guidance (e.g., Langfuse semantic mapping)
+- `docs/architecture.md` — Layer structure, directory mapping, dependency graph
 
-### Public API (6 exports)
+### Entry Points
 
-1. `createTracerProvider(options)` → `TracerHandle` (tracer + flush + rootSpan helper)
-2. `OtlpHttpJsonExporter` — OTLP/HTTP JSON exporter (advanced use)
-3. `createHonoMiddleware()` — Hono framework middleware
+The package has 3 separate entry points. Core captures AI SDK spans natively; middleware and exporters are opt-in extensions:
+
+| Entry Point       | Package Path                           | Source                      |
+| ----------------- | -------------------------------------- | --------------------------- |
+| Core              | `@aotoki/edge-otel`                    | `src/index.ts`              |
+| Hono Middleware   | `@aotoki/edge-otel/middleware/hono`    | `src/middleware/hono.ts`    |
+| Langfuse Exporter | `@aotoki/edge-otel/exporters/langfuse` | `src/exporters/langfuse.ts` |
+
+### Dependency Direction
+
+All imports point inward. Outer modules never import inner modules' peers:
+
+```
+types.ts ← serializer.ts ← exporter.ts ← provider.ts
+                                              ↑
+middleware/hono.ts → types.ts only       context.ts (side-effect, imported by index.ts)
+exporters/langfuse.ts → types.ts only
+```
+
+- `context.ts` is a **side-effect module** — registers `AsyncLocalStorageContextManager` at module scope. Imported by `index.ts` (not `provider.ts`) so tests can import provider directly without triggering global state.
+- `middleware/hono.ts` receives a `TracerHandle`, never imports `provider.ts`.
+- `exporters/langfuse.ts` constructs an `ExporterConfig`, nothing more.
 
 ### Key Constraints
 
 - **No global registration** — never call `provider.register()`; pass tracer directly
 - **SimpleSpanProcessor only** — no `BatchSpanProcessor` (no background timers in isolates)
-- **AsyncLocalStorageContextManager** registered at module scope, before first request
-- **`flush()` always resolves** — telemetry failures never reject the application promise
+- **`flush()` always resolves** — telemetry failures are logged via `console.warn`, never reject
 - **Use `forceFlush()` per request**, not `shutdown()`; register via `ctx.waitUntil()`
-- Timestamps as nanosecond decimal strings (avoid `MAX_SAFE_INTEGER` overflow)
-
-### Directory Layout
-
-- `src/` — Source code (TypeScript, ESM)
-- `tests/` — Test files (`*.test.ts`)
-- `docs/` — Specification documents (read-only reference, not generated)
+- **Timestamps as nanosecond decimal strings** — string concatenation, not arithmetic (avoids `MAX_SAFE_INTEGER` overflow)
+- **`ExporterConfig.endpoint` is a full URL** — the exporter uses it as-is; presets construct the complete path
