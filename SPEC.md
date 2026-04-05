@@ -4,7 +4,7 @@
 
 ### Purpose
 
-Developers building AI-powered applications on Cloudflare Workers with the Vercel AI SDK cannot observe their LLM calls in Langfuse. Every available integration path fails in V8 isolate runtimes.
+V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) cannot export OpenTelemetry traces. The Node.js OTel SDK depends on platform APIs that V8 isolates do not provide.
 
 **Problem: Node.js OTel SDK is incompatible with V8 isolate runtimes**
 
@@ -17,16 +17,17 @@ Developers building AI-powered applications on Cloudflare Workers with the Verce
 | No background timers that survive request end                 | `BatchSpanProcessor` drops all buffered spans when the isolate exits                           |
 | No shared state across requests                               | Module-level OTel singletons cannot be assumed to persist; global registry risks state leakage |
 
-**Problem: All existing solutions fail**
+**Problem: All existing solutions for OTel on Edge runtimes fail**
 
 | Solution                                     | Failure mode                                                                                                                                             | Status                                                         |
 | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `@opentelemetry/sdk-node`                    | Depends on `node:perf_hooks`, `node:async_hooks`, `node:http` — absent or broken in V8 isolates                                                          | Broken in V8 isolates                                          |
 | `@langfuse/otel` + `@opentelemetry/sdk-node` | Build error (`Could not resolve "perf_hooks"`) or runtime error (`Cannot convert object to primitive value`) from `sdk-trace-node` transitive dependency | Broken in V8 isolates                                          |
 | `langfuse-vercel`                            | Same transitive dependency on `sdk-trace-node` via `@ai-sdk/otel`                                                                                        | Deprecated August 2025; broken in V8 isolates                  |
-| `@microlabs/otel-cf-workers`                 | Instruments HTTP and CF bindings, not the AI SDK span tree; no `LangfuseSpanProcessor` equivalent; RC status; larger surface area than required          | Viable for general observability; wrong fit for AI SDK tracing |
+| `@microlabs/otel-cf-workers`                 | Instruments HTTP and CF bindings, not the AI SDK span tree; RC status; larger surface area than required                                                 | Viable for general observability; wrong fit for AI SDK tracing |
 | Cloudflare automatic tracing                 | Captures infrastructure spans only; does not capture `ai.generateText`, `ai.streamText`, or `ai.toolCall` spans emitted by the AI SDK                    | Complementary, not a substitute                                |
 
-**This package provides a correct integration path** by building on only the runtime-agnostic layers of the OTel SDK (`sdk-trace-base`, not `sdk-trace-node`) and using only Web Platform APIs (`fetch()`, `btoa()`, `crypto`, `JSON`) for export.
+`@aotoki/edge-otel` is a correct OTel SDK for Edge/Serverless runtimes. It builds on `sdk-trace-base` (not `sdk-trace-node`) and exports using only Web Platform APIs (`fetch()`, `btoa()`, `crypto`, `JSON`). Langfuse is one supported backend; any OTLP/HTTP endpoint is a valid target.
 
 ---
 
