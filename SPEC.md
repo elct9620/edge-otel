@@ -555,11 +555,11 @@ This section defines how errors surface through the system — from an AI SDK pr
 
 #### Error Categories
 
-| Category                        | Source                                        | Example                                                                         | Handling                                                                                                                                                                            |
-| ------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hard errors (thrown exceptions) | AI SDK provider calls                         | API authentication failure, rate limit exhausted, network timeout, server error | Automatic — the AI SDK records the exception on the span and sets `status.code = ERROR` before re-throwing; no developer action needed                                              |
-| Soft errors (non-thrown)        | AI SDK returns with a terminal `finishReason` | `finishReason = "error"` or `"content-filter"`                                  | Manual — the developer must inspect `finishReason` after the call returns and set a backend-specific observation level attribute on the active span (see Backend-Specific Guidance) |
-| Export errors                   | Exporter flush                                | Network failure during POST, HTTP 4xx, payload exceeds 4.5 MB                   | Automatic — logged as a warning and spans are dropped; the application is never notified                                                                                            |
+| Category                        | Source                                        | Example                                                                         | Handling                                                                                                                                                                                            |
+| ------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hard errors (thrown exceptions) | AI SDK provider calls                         | API authentication failure, rate limit exhausted, network timeout, server error | Automatic — the AI SDK records the exception on the span and sets `status.code = ERROR` before re-throwing; no developer action needed                                                              |
+| Soft errors (non-thrown)        | AI SDK returns with a terminal `finishReason` | `finishReason = "error"` or `"content-filter"`                                  | Manual — the developer must inspect `finishReason` after the call returns and set the span's OTel status to ERROR; backend-specific severity attributes are documented in Backend-Specific Guidance |
+| Export errors                   | Exporter flush                                | Network failure during POST, HTTP 4xx, payload exceeds 4.5 MB                   | Automatic — logged as a warning and spans are dropped; the application is never notified                                                                                                            |
 
 ---
 
@@ -576,7 +576,7 @@ The AI SDK wraps every provider call in an internal span helper. When a provider
 | Both inner and outer spans marked          | The inner span (e.g., `ai.generateText.doGenerate`) and the outer span (e.g., `ai.generateText`) both receive ERROR status — the exception propagates up through the span hierarchy |
 | Exception re-thrown                        | The original exception is re-thrown unchanged to the application's `try/catch`                                                                                                      |
 
-No configuration or manual instrumentation is required for this path. The exporter forwards `status.code` and the exception events as part of the standard OTLP payload, and Langfuse maps `status.code = 2` to `level = "ERROR"` automatically.
+No configuration or manual instrumentation is required for this path. The exporter forwards `status.code` and the exception events as part of the standard OTLP payload. How each backend interprets `status.code = 2` varies — see Backend-Specific Guidance for backend-specific level mapping.
 
 ---
 
@@ -606,7 +606,7 @@ The AI SDK retries transient failures internally (default: up to 2 retries, 3 to
 | All retries exhausted              | The `doGenerate` span ends with `status.code = 2` (ERROR) and `exception.type = "AI_RetryError"` |
 | `ai.settings.maxRetries` attribute | Always present on the span, regardless of whether any retries occurred                           |
 
-An implementer cannot distinguish a first-attempt success from a third-attempt success in the span data. A Langfuse observation marked ERROR for a `doGenerate` span means all retries were exhausted and the call ultimately failed — not that a single attempt failed.
+An implementer cannot distinguish a first-attempt success from a third-attempt success in the span data. A `doGenerate` span with `status.code = 2` (ERROR) means all retries were exhausted and the call ultimately failed — not that a single attempt failed.
 
 ---
 
@@ -616,46 +616,26 @@ _Corresponds to User Journey 5._
 
 When a provider returns HTTP 200 but signals a problem via the stream finish reason, the AI SDK may not throw an exception. This is a known gap in the AI SDK telemetry model.
 
-| Condition                                                                | Span state                        | Langfuse level                               |
-| ------------------------------------------------------------------------ | --------------------------------- | -------------------------------------------- |
-| `finishReason = "error"` — provider signals error via streaming protocol | `status.code` remains `0` (UNSET) | `"DEFAULT"` — the problem is silently hidden |
-| `finishReason = "content-filter"` — content blocked mid-stream           | `status.code` remains `0` (UNSET) | `"DEFAULT"` — the problem is silently hidden |
+| Condition                                                                | Span state                                                     |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| `finishReason = "error"` — provider signals error via streaming protocol | `status.code` remains `0` (UNSET) — the problem is not visible |
+| `finishReason = "content-filter"` — content blocked mid-stream           | `status.code` remains `0` (UNSET) — the problem is not visible |
 
-The system does not detect soft errors automatically. To make a soft error visible in Langfuse, the developer inspects `finishReason` after the call returns and sets the Langfuse-specific attribute on the active span:
-
-| Attribute                             | Value                                                             | Effect                                                          |
-| ------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------- |
-| `langfuse.observation.level`          | `"WARNING"`                                                       | Overrides the inferred level for the observation in Langfuse    |
-| `langfuse.observation.status_message` | Descriptive string (e.g., `"Generation stopped: content-filter"`) | Populates the `statusMessage` field on the Langfuse observation |
-
-`langfuse.observation.level` is a Langfuse-proprietary span attribute. Setting it to `"WARNING"` does not change `span.status.code`, so other OTel backends (Jaeger, Grafana Tempo, Honeycomb) are not affected. To make the same failure visible to non-Langfuse backends, the span's OTel status must also be set to ERROR and the exception recorded — that path produces `level = "ERROR"` in Langfuse rather than `"WARNING"`, so the two approaches target different severity semantics.
+The system does not detect soft errors automatically. The developer must inspect `finishReason` after the call returns and decide whether to signal a failure. To make a soft error visible to any OTLP backend, set the span's OTel status to ERROR. Backend-specific severity attributes (e.g., intermediate WARNING levels) are documented in Backend-Specific Guidance.
 
 ---
 
-#### Status Code to Langfuse Level Mapping
+#### OTel Status Code Values
 
-| `span.status.code`                                  | Value | Langfuse observation level                                     |
-| --------------------------------------------------- | ----- | -------------------------------------------------------------- |
-| UNSET                                               | 0     | `"DEFAULT"`                                                    |
-| OK                                                  | 1     | `"DEFAULT"`                                                    |
-| ERROR                                               | 2     | `"ERROR"`                                                      |
-| (any, when `langfuse.observation.level` is present) | —     | Whatever value is set — takes priority over the inferred level |
+The OTel `status.code` values are standard across all backends:
 
-`"WARNING"` and `"DEBUG"` levels in Langfuse can only be produced via the explicit `langfuse.observation.level` attribute. There is no `span.status.code` value that maps to either.
+| `status.code` | Value | Meaning                |
+| ------------- | ----- | ---------------------- |
+| UNSET         | 0     | No explicit status set |
+| OK            | 1     | Explicit success       |
+| ERROR         | 2     | Explicit failure       |
 
----
-
-#### Trace-Level Error Propagation
-
-Langfuse sets the trace-level `level` field to the highest severity among all observations in the trace.
-
-| Condition                       | Trace-level outcome                                             |
-| ------------------------------- | --------------------------------------------------------------- |
-| All observations at `"DEFAULT"` | Trace level is `"DEFAULT"`                                      |
-| Any observation at `"WARNING"`  | Trace level is `"WARNING"`                                      |
-| Any observation at `"ERROR"`    | Trace level is `"ERROR"` regardless of other observation levels |
-
-**Known risk**: In a multi-step agentic flow, a single failed `doGenerate` span — even one that was a transient failure in an otherwise successful request — marks the entire trace as `"ERROR"`. There is no built-in Langfuse mechanism to suppress a child observation's ERROR from propagating to the trace level. Alerting rules based on trace-level severity should account for this behavior.
+How each backend interprets and displays these values varies. See Backend-Specific Guidance for backend-specific level mapping and trace-level propagation behavior.
 
 ---
 
@@ -1017,6 +997,35 @@ The `level` field on an observation is determined in the following order.
 | 3        | `span.status.code` = `0` or `1` → default                  | `"DEFAULT"`                                    |
 
 The `statusMessage` field is set from `langfuse.observation.status_message` (priority 1) or `span.status.message` (priority 2).
+
+`"WARNING"` and `"DEBUG"` levels can only be produced via the explicit `langfuse.observation.level` attribute. There is no `span.status.code` value that maps to either.
+
+---
+
+#### Soft Error WARNING Attribute
+
+When a soft error occurs (`finishReason = "error"` or `"content-filter"`), the span's `status.code` remains `0` (UNSET) and Langfuse infers level `"DEFAULT"`, hiding the problem. To surface a soft error in Langfuse at WARNING severity without escalating to ERROR, set the following Langfuse-proprietary attributes on the active span:
+
+| Attribute                             | Value                                                             | Effect                                                       |
+| ------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------ |
+| `langfuse.observation.level`          | `"WARNING"`                                                       | Overrides the inferred level for the observation in Langfuse |
+| `langfuse.observation.status_message` | Descriptive string (e.g., `"Generation stopped: content-filter"`) | Populates the `statusMessage` field on the observation       |
+
+Setting `langfuse.observation.level` to `"WARNING"` does not change `span.status.code`, so other OTel backends are not affected. To escalate the same failure to ERROR (in Langfuse and all other backends), set the span's OTel status to ERROR instead — this produces `level = "ERROR"` in Langfuse rather than `"WARNING"`.
+
+---
+
+#### Trace-Level Error Propagation
+
+Langfuse sets the trace-level `level` field to the highest severity among all observations in the trace.
+
+| Condition                       | Trace-level outcome                                             |
+| ------------------------------- | --------------------------------------------------------------- |
+| All observations at `"DEFAULT"` | Trace level is `"DEFAULT"`                                      |
+| Any observation at `"WARNING"`  | Trace level is `"WARNING"`                                      |
+| Any observation at `"ERROR"`    | Trace level is `"ERROR"` regardless of other observation levels |
+
+**Known risk**: In a multi-step agentic flow, a single failed `doGenerate` span — even one that was a transient failure in an otherwise successful request — marks the entire trace as `"ERROR"`. There is no built-in Langfuse mechanism to suppress a child observation's ERROR from propagating to the trace level. Alerting rules based on trace-level severity should account for this behavior.
 
 ---
 
