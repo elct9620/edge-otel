@@ -68,7 +68,7 @@ The application may call `provider.getTracer(scopeName)` multiple times with dif
 const aiTracer = provider.getTracer("ai"); // AI SDK spans
 const appTracer = provider.getTracer("my-app"); // custom application spans
 
-tracer.startActiveSpan("rag-retrieval", async (span) => {
+appTracer.startActiveSpan("rag-retrieval", async (span) => {
   // This span appears under scope "my-app" in the OTLP payload,
   // but shares the same traceId as the parent AI SDK span.
 });
