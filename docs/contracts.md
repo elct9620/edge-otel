@@ -219,7 +219,7 @@ Multiple exporters can be wired to the same provider by attaching a separate `Si
 | Multiple simultaneous backends | Add one `SimpleSpanProcessor` per exporter to the provider; all processors receive every span        |
 | Backend preset                 | Provides default `endpoint` and `headers` values for a specific backend; no other component changes  |
 
-Adding support for a new backend requires only a new preset that constructs an `ExporterConfig` — the exporter, processor, provider, and middleware are unchanged. Langfuse is the first supported backend preset.
+Adding support for a new backend requires only a new preset that constructs an `ExporterConfig` — the exporter, processor, and provider are unchanged. Langfuse is the first supported backend preset.
 
 ---
 

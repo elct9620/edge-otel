@@ -170,7 +170,7 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Context** | A developer wants to send traces to a different OTLP-compatible collector — such as Grafana Tempo, Jaeger, Honeycomb, or a self-hosted OpenTelemetry Collector — instead of Langfuse. |
 | **Action**  | The developer changes the URL and authorization credentials in the `createTracerProvider` configuration; no other code changes are required.                                          |
-| **Outcome** | The same AI SDK spans are exported to the alternative collector using OTLP/HTTP JSON; the AI SDK integration layer, middleware, and context propagation are unaffected.               |
+| **Outcome** | The same AI SDK spans are exported to the alternative collector using OTLP/HTTP JSON; the AI SDK integration layer and context propagation are unaffected.                            |
 
 ---
 
