@@ -12,14 +12,14 @@ This document defines the public API surface, the TypeScript interfaces that imp
 
 The package exposes exactly the following identifiers at its public boundary. Internal types, helper functions, and the span processor wiring are not part of the public API.
 
-| Export                  | Kind      | Purpose                                                                                             |
-| ----------------------- | --------- | --------------------------------------------------------------------------------------------------- |
-| `createTracerProvider`  | Function  | Factory: accepts configuration and returns a `TracerHandle`                                         |
-| `TracerHandle`          | Interface | The object returned by the factory; consumed by application code                                    |
-| `TracerProviderOptions` | Interface | Configuration accepted by the factory; extends the exporter config with `serviceName`               |
-| `ExporterConfig`        | Interface | Endpoint and headers configuration for the OTLP/HTTP exporter                                       |
-| `OtlpHttpJsonExporter`  | Class     | The OTLP/HTTP JSON exporter; exported for advanced use (custom processor wiring, multiple backends) |
-| `createHonoMiddleware`  | Function  | Returns a Hono middleware function that manages root span lifecycle for a complete Hono request     |
+| Export                  | Kind      | Purpose                                                                                                                      |
+| ----------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `createTracerProvider`  | Function  | Factory: accepts configuration and returns a `TracerHandle`                                                                  |
+| `TracerHandle`          | Interface | The object returned by the factory; consumed by application code                                                             |
+| `TracerProviderOptions` | Interface | Configuration accepted by the factory; extends the exporter config with `serviceName`, `scopeName`, and `resourceAttributes` |
+| `ExporterConfig`        | Interface | Endpoint and headers configuration for the OTLP/HTTP exporter                                                                |
+| `OtlpHttpJsonExporter`  | Class     | The OTLP/HTTP JSON exporter; exported for advanced use (custom processor wiring, multiple backends)                          |
+| `createHonoMiddleware`  | Function  | Returns a Hono middleware function that manages root span lifecycle for a complete Hono request                              |
 
 `OtlpHttpJsonExporter` is exported because implementers wiring multiple backends or a custom `SimpleSpanProcessor` need direct access to the exporter instance. It is not required for typical single-backend use.
 
@@ -36,11 +36,13 @@ Backend presets (e.g., a Langfuse preset) may provide convenience wrappers that 
 | `endpoint` | `string`                 | Yes      | —       | Full URL of the OTLP/HTTP JSON traces endpoint (e.g. `https://example.com/api/public/otel/v1/traces`). |
 | `headers`  | `Record<string, string>` | No       | `{}`    | Additional HTTP headers sent with every export POST (authentication, backend-specific headers, etc.).  |
 
-`TracerProviderOptions` extends `ExporterConfig` with one additional field.
+`TracerProviderOptions` extends `ExporterConfig` with additional fields.
 
-| Field         | Type     | Required | Default               | Description                                                                |
-| ------------- | -------- | -------- | --------------------- | -------------------------------------------------------------------------- |
-| `serviceName` | `string` | No       | `'cloudflare-worker'` | Value of the `service.name` OTel resource attribute attached to all spans. |
+| Field                | Type                     | Required | Default               | Description                                                                                                           |
+| -------------------- | ------------------------ | -------- | --------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `serviceName`        | `string`                 | No       | `'cloudflare-worker'` | Value of the `service.name` OTel resource attribute attached to all spans.                                            |
+| `scopeName`          | `string`                 | No       | `'ai'`                | Instrumentation scope name passed to `provider.getTracer()`. Default matches AI SDK convention.                       |
+| `resourceAttributes` | `Record<string, string>` | No       | `{}`                  | Additional OTel resource attributes merged into the resource. Used for backend metadata (e.g., environment, release). |
 
 TypeScript interface:
 
@@ -52,6 +54,8 @@ interface ExporterConfig {
 
 interface TracerProviderOptions extends ExporterConfig {
   serviceName?: string;
+  scopeName?: string;
+  resourceAttributes?: Record<string, string>;
 }
 ```
 

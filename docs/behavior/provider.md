@@ -33,9 +33,9 @@ The tracer is passed directly to each AI SDK call via `experimental_telemetry.tr
 
 ## Instrumentation Scope Name
 
-The tracer is obtained with the instrumentation scope name `'ai'`.
+The tracer is obtained with the instrumentation scope name specified by the `scopeName` configuration option. The default is `'ai'`.
 
-This is the AI SDK convention for AI/LLM operation tracing. The AI SDK emits spans under this scope name, and backends that support AI SDK integration key on this value to classify and enrich AI operation data.
+`'ai'` is the AI SDK convention for AI/LLM operation tracing. The AI SDK emits spans under this scope name, and backends that support AI SDK integration key on this value to classify and enrich AI operation data. The default can be overridden at provider creation time for non-AI-SDK use cases.
 
 ---
 
@@ -53,12 +53,13 @@ This is the AI SDK convention for AI/LLM operation tracing. The AI SDK emits spa
 
 Every span exported by the provider carries the following resource attributes.
 
-| Attribute                | Source                        | Notes                                                                |
-| ------------------------ | ----------------------------- | -------------------------------------------------------------------- |
-| `service.name`           | Configuration (`serviceName`) | Defaults to `'cloudflare-worker'`. Standard OTel resource attribute. |
-| `telemetry.sdk.name`     | OTel SDK                      | Populated automatically by the SDK.                                  |
-| `telemetry.sdk.language` | OTel SDK                      | Populated automatically by the SDK.                                  |
-| `telemetry.sdk.version`  | OTel SDK                      | Populated automatically by the SDK.                                  |
+| Attribute                | Source                               | Notes                                                                                                            |
+| ------------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `service.name`           | Configuration (`serviceName`)        | Defaults to `'cloudflare-worker'`. Standard OTel resource attribute.                                             |
+| Custom attributes        | Configuration (`resourceAttributes`) | Additional key-value pairs merged into the resource. Examples: `deployment.environment.name`, `service.version`. |
+| `telemetry.sdk.name`     | OTel SDK                             | Populated automatically by the SDK.                                                                              |
+| `telemetry.sdk.language` | OTel SDK                             | Populated automatically by the SDK.                                                                              |
+| `telemetry.sdk.version`  | OTel SDK                             | Populated automatically by the SDK.                                                                              |
 
 ---
 
@@ -95,13 +96,15 @@ The root-span helper is designed for Hono middleware and plain Worker fetch hand
 
 ## Configuration
 
-The factory accepts three categories of configuration:
+The factory accepts the following configuration:
 
 | Category                   | Required | Default               | Description                                                                                                                           |
 | -------------------------- | -------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Endpoint URL               | Yes      | —                     | The OTLP/HTTP endpoint to which spans are exported. No default; backend presets provide this value.                                   |
 | Authentication credentials | Yes      | —                     | Credentials used to authenticate with the OTLP endpoint (e.g., as HTTP Basic Auth). No default; backend presets provide these values. |
 | `serviceName`              | No       | `'cloudflare-worker'` | Value of the `service.name` resource attribute. Standard OTel resource attribute identifying the reporting service.                   |
+| `scopeName`                | No       | `'ai'`                | Instrumentation scope name for the tracer. Default matches AI SDK convention.                                                         |
+| `resourceAttributes`       | No       | `{}`                  | Additional OTel resource attributes merged into the resource (e.g., `deployment.environment.name`, `service.version`).                |
 
 The shape of the credentials and the exact field names are determined by the implementation. Backend-specific presets (such as a Langfuse preset) supply the endpoint URL and credential values from backend-specific configuration.
 

@@ -20,13 +20,13 @@ src/
   index.ts              Core public API barrel
   types.ts              ExporterConfig, TracerProviderOptions, TracerHandle
   serializer.ts         ReadableSpan[] → ExportTraceServiceRequest (pure function)
-  exporter.ts           OtlpHttpJsonExporter (buffer + flush + POST via fetch)
   provider.ts           createTracerProvider factory → TracerHandle
   context.ts            AsyncLocalStorageContextManager module-scope registration
+  exporters/
+    http.ts             OtlpHttpJsonExporter (buffer + flush + POST via fetch)
+    langfuse.ts         Langfuse exporter preset — separate entry point
   middleware/
     hono.ts             createHonoMiddleware — separate entry point
-  exporters/
-    langfuse.ts         Langfuse exporter preset — separate entry point
 ```
 
 ## Entry Points
@@ -48,11 +48,11 @@ types.ts              (no deps — pure interfaces)
     ↑
 serializer.ts         (no project deps — pure transform)
     ↑
-exporter.ts           → serializer.ts, types.ts
+exporters/http.ts     → serializer.ts, types.ts
     ↑
 context.ts            (no project deps — side-effect module)
     ↑
-provider.ts           → exporter.ts, context.ts, types.ts
+provider.ts           → exporters/http.ts, context.ts, types.ts
 
 middleware/hono.ts    → types.ts (receives TracerHandle)
 exporters/langfuse.ts → types.ts (constructs ExporterConfig)

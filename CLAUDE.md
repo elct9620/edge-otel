@@ -45,9 +45,9 @@ The package has 3 separate entry points. Core captures AI SDK spans natively; mi
 All imports point inward. Outer modules never import inner modules' peers:
 
 ```
-types.ts ← serializer.ts ← exporter.ts ← provider.ts
-                                              ↑
-middleware/hono.ts → types.ts only       context.ts (side-effect, imported by index.ts)
+types.ts ← serializer.ts ← exporters/http.ts ← provider.ts
+                                                    ↑
+middleware/hono.ts → types.ts only             context.ts (side-effect, imported by index.ts)
 exporters/langfuse.ts → types.ts only
 ```
 
