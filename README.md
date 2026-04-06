@@ -1,5 +1,8 @@
 # @aotoki/edge-otel
 
+[![Tests](https://github.com/elct9620/edge-otel/actions/workflows/tests.yml/badge.svg)](https://github.com/elct9620/edge-otel/actions/workflows/tests.yml)
+[![codecov](https://codecov.io/gh/elct9620/edge-otel/graph/badge.svg)](https://codecov.io/gh/elct9620/edge-otel)
+
 Lightweight OpenTelemetry SDK for V8 isolate edge runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy).
 
 Uses only Web Platform APIs (`fetch`, `btoa`) — no Node.js built-ins required.
