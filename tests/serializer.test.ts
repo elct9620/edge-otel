@@ -597,4 +597,53 @@ describe("serializeSpans", () => {
       ).toBe(1);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Failed tool call enrichment
+  // -------------------------------------------------------------------------
+
+  describe("failed tool call enrichment", () => {
+    it("sets status ERROR (code 2) for ai.toolCall span with UNSET status and no ai.toolCall.result", () => {
+      const span = createMockSpan({
+        name: "ai.toolCall",
+        status: { code: SpanStatusCode.UNSET },
+        attributes: {
+          "ai.toolCall.id": "call-abc",
+          "ai.toolCall.name": "search",
+        },
+      });
+      const result = serializeSpans([span]);
+      expect(result.resourceSpans[0].scopeSpans[0].spans[0].status).toEqual({
+        code: 2,
+      });
+    });
+
+    it("does not override status for ai.toolCall span that has ai.toolCall.result (successful call)", () => {
+      const span = createMockSpan({
+        name: "ai.toolCall",
+        status: { code: SpanStatusCode.OK },
+        attributes: {
+          "ai.toolCall.id": "call-abc",
+          "ai.toolCall.name": "search",
+          "ai.toolCall.result": '{"items":[]}',
+        },
+      });
+      const result = serializeSpans([span]);
+      expect(result.resourceSpans[0].scopeSpans[0].spans[0].status.code).toBe(
+        SpanStatusCode.OK,
+      );
+    });
+
+    it("does not upgrade status for a non-ai.toolCall span with UNSET status and no result attribute", () => {
+      const span = createMockSpan({
+        name: "ai.generateText",
+        status: { code: SpanStatusCode.UNSET },
+        attributes: {},
+      });
+      const result = serializeSpans([span]);
+      expect(result.resourceSpans[0].scopeSpans[0].spans[0].status.code).toBe(
+        SpanStatusCode.UNSET,
+      );
+    });
+  });
 });

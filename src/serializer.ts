@@ -124,6 +124,17 @@ function toOtlpSpan(span: ReadableSpan): OtlpSpan {
     otlpSpan.parentSpanId = parentId;
   }
 
+  // Detect failed tool calls: the AI SDK leaves status UNSET when tool
+  // execution throws, and omits ai.toolCall.result on failure.
+  // ReadableSpan is immutable post-end, so we enrich at serialization time.
+  if (
+    span.name === "ai.toolCall" &&
+    span.status.code === 0 &&
+    span.attributes["ai.toolCall.result"] === undefined
+  ) {
+    otlpSpan.status = { code: 2 };
+  }
+
   return otlpSpan;
 }
 
