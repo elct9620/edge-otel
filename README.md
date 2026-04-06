@@ -30,17 +30,27 @@ import { createHonoMiddleware } from "@aotoki/edge-otel/middleware/hono";
 import { langfuseExporter } from "@aotoki/edge-otel/exporters/langfuse";
 import { Hono } from "hono";
 
-const provider = createTracerProvider({
-  ...langfuseExporter({
-    publicKey: env.LANGFUSE_PUBLIC_KEY,
-    secretKey: env.LANGFUSE_SECRET_KEY,
-  }),
-  serviceName: "my-worker",
+type Env = {
+  Bindings: {
+    LANGFUSE_PUBLIC_KEY: string;
+    LANGFUSE_SECRET_KEY: string;
+  };
+};
+
+const app = new Hono<Env>();
+
+app.use("*", async (c, next) => {
+  const provider = createTracerProvider({
+    ...langfuseExporter({
+      publicKey: c.env.LANGFUSE_PUBLIC_KEY,
+      secretKey: c.env.LANGFUSE_SECRET_KEY,
+    }),
+    serviceName: "my-worker",
+  });
+
+  const middleware = createHonoMiddleware(provider);
+  return middleware(c, next);
 });
-
-const app = new Hono();
-
-app.use("*", createHonoMiddleware(provider));
 
 app.get("/", async (c) => {
   const result = await generateText({
@@ -112,6 +122,28 @@ app.get("/rag", async (c) => {
 });
 ```
 
+### Streaming with `deferFlush`
+
+When using `streamText`, spans are not complete until the stream is fully consumed. Use `deferFlush` to delay the flush:
+
+```typescript
+app.post("/chat", async (c) => {
+  const tracer = c.get("tracer");
+  const deferFlush = c.get("deferFlush");
+
+  const result = streamText({
+    model: openai("gpt-4o"),
+    prompt: "Hello!",
+    experimental_telemetry: { isEnabled: true, tracer },
+  });
+
+  // Defer flush until the stream is fully consumed
+  deferFlush(result.textStream);
+
+  return c.body(result.textStream);
+});
+```
+
 ## API
 
 ### `createTracerProvider(options): TracerProvider`
@@ -144,21 +176,23 @@ import { createHonoMiddleware } from "@aotoki/edge-otel/middleware/hono";
 
 **Options:**
 
-| Option       | Type                     | Default          | Description                     |
-| ------------ | ------------------------ | ---------------- | ------------------------------- |
-| `spanName`   | `string`                 | `'http.request'` | Root span name                  |
-| `attributes` | `Record<string, string>` | `undefined`      | Additional root span attributes |
+| Option       | Type                     | Default          | Description                               |
+| ------------ | ------------------------ | ---------------- | ----------------------------------------- |
+| `spanName`   | `string`                 | `'http.request'` | Root span name                            |
+| `scopeName`  | `string`                 | `'ai'`           | Instrumentation scope name for the tracer |
+| `attributes` | `Record<string, string>` | `undefined`      | Additional root span attributes           |
 
 The middleware:
 
 - Creates a root span via `tracer.startActiveSpan()` and activates context propagation
-- Exposes `tracer` via `c.get('tracer')`
+- Exposes `tracer` via `c.get('tracer')` for handler code
+- Exposes `deferFlush` via `c.get('deferFlush')` for streaming — call `deferFlush(streamPromise)` to delay the flush until the stream completes
 - Records exceptions and sets ERROR status on failures
 - Ends the span and flushes via `c.executionCtx.waitUntil()` in all paths
 
-### `langfuseExporter(options): ExporterConfig`
+### `langfuseExporter(options): LangfuseExporterConfig`
 
-Constructs an `ExporterConfig` for Langfuse.
+Constructs a `LangfuseExporterConfig` (extends `ExporterConfig` with optional `resourceAttributes`) for Langfuse. Spread the result into `createTracerProvider`.
 
 ```typescript
 import { langfuseExporter } from "@aotoki/edge-otel/exporters/langfuse";
