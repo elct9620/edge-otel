@@ -5,11 +5,17 @@
 
 Lightweight OpenTelemetry SDK for V8 isolate edge runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy).
 
-Uses only Web Platform APIs (`fetch`, `btoa`) — no Node.js built-ins required.
+The standard `@opentelemetry/sdk-node` depends on `node:perf_hooks`, `node:async_hooks`, and `node:http`, which are absent or broken in V8 isolate runtimes. This package provides a correct OTel span exporter and tracer provider that works in these environments using only Web Platform APIs (`fetch`, `btoa`) — no Node.js built-ins required.
 
-## Why
+## Features
 
-The standard `@opentelemetry/sdk-node` depends on `node:perf_hooks`, `node:async_hooks`, and `node:http`, which are absent or broken in V8 isolate runtimes. This package provides a correct OTel span exporter and tracer provider that works in these environments.
+- **OTLP/HTTP JSON exporter** — exports spans to any OTLP-compatible collector (Langfuse, Grafana Tempo, Honeycomb, Jaeger, etc.)
+- **SimpleSpanProcessor** — per-span buffering with explicit flush, no background timers
+- **Context propagation** — `AsyncLocalStorage`-based trace grouping across multiple AI SDK calls
+- **Hono middleware** — root span lifecycle, error capture, and flush registration out of the box
+- **Langfuse preset** — pre-configured exporter for Langfuse backend
+- **Manual spans** — standard OTel `Tracer` API for custom instrumentation (RAG, DB queries, etc.)
+- **Streaming support** — `deferFlush` delays export until the stream is fully consumed
 
 ## Install
 
@@ -151,65 +157,27 @@ app.post("/chat", async (c) => {
 
 ### `createTracerProvider(options): TracerProvider`
 
-Creates a tracer provider wired with `SimpleSpanProcessor` and `OtlpHttpJsonExporter`.
+Creates a tracer provider wired with `SimpleSpanProcessor` and `OtlpHttpJsonExporter`. Options include `endpoint`, `headers`, `serviceName`, and `resourceAttributes`. Returns a provider with `getTracer(scopeName)` and `forceFlush()`.
 
-**Options:**
-
-| Option               | Type                     | Default               | Description                                |
-| -------------------- | ------------------------ | --------------------- | ------------------------------------------ |
-| `endpoint`           | `string`                 | _(required)_          | Full OTLP/HTTP endpoint URL                |
-| `headers`            | `Record<string, string>` | `{}`                  | Custom HTTP headers for the export request |
-| `serviceName`        | `string`                 | `'cloudflare-worker'` | `service.name` resource attribute          |
-| `resourceAttributes` | `Record<string, string>` | `{}`                  | Additional OTel resource attributes        |
-
-**Returns `TracerProvider`:**
-
-| Member                 | Type                            | Description                                                 |
-| ---------------------- | ------------------------------- | ----------------------------------------------------------- |
-| `getTracer(scopeName)` | `(scopeName: string) => Tracer` | Pass the returned tracer to `experimental_telemetry.tracer` |
-| `forceFlush()`         | `() => Promise<void>`           | Register with `ctx.waitUntil(provider.forceFlush())`        |
+```typescript
+import { createTracerProvider } from "@aotoki/edge-otel";
+```
 
 ### `createHonoMiddleware(provider, options?): MiddlewareHandler`
 
-Hono middleware that manages root span lifecycle per request. Receives a `TracerProvider` and calls `provider.getTracer()` and `provider.forceFlush()` internally.
+Hono middleware that manages root span lifecycle per request. Creates a root span, exposes `tracer` and `deferFlush` via Hono context, captures errors, and flushes via `c.executionCtx.waitUntil()`.
 
 ```typescript
 import { createHonoMiddleware } from "@aotoki/edge-otel/middleware/hono";
 ```
 
-**Options:**
-
-| Option       | Type                     | Default          | Description                               |
-| ------------ | ------------------------ | ---------------- | ----------------------------------------- |
-| `spanName`   | `string`                 | `'http.request'` | Root span name                            |
-| `scopeName`  | `string`                 | `'ai'`           | Instrumentation scope name for the tracer |
-| `attributes` | `Record<string, string>` | `undefined`      | Additional root span attributes           |
-
-The middleware:
-
-- Creates a root span via `tracer.startActiveSpan()` and activates context propagation
-- Exposes `tracer` via `c.get('tracer')` for handler code
-- Exposes `deferFlush` via `c.get('deferFlush')` for streaming — call `deferFlush(streamPromise)` to delay the flush until the stream completes
-- Records exceptions and sets ERROR status on failures
-- Ends the span and flushes via `c.executionCtx.waitUntil()` in all paths
-
 ### `langfuseExporter(options): LangfuseExporterConfig`
 
-Constructs a `LangfuseExporterConfig` (extends `ExporterConfig` with optional `resourceAttributes`) for Langfuse. Spread the result into `createTracerProvider`.
+Constructs exporter configuration for Langfuse. Spread the result into `createTracerProvider`. Accepts `publicKey`, `secretKey`, and optional `baseUrl`, `environment`, `release`.
 
 ```typescript
 import { langfuseExporter } from "@aotoki/edge-otel/exporters/langfuse";
 ```
-
-**Options:**
-
-| Option        | Type     | Default                        | Description                                      |
-| ------------- | -------- | ------------------------------ | ------------------------------------------------ |
-| `publicKey`   | `string` | _(required)_                   | Langfuse public key (`pk-lf-...`)                |
-| `secretKey`   | `string` | _(required)_                   | Langfuse secret key (`sk-lf-...`)                |
-| `baseUrl`     | `string` | `'https://cloud.langfuse.com'` | Langfuse instance URL                            |
-| `environment` | `string` | `undefined`                    | Deployment environment (e.g., `"production"`)    |
-| `release`     | `string` | `undefined`                    | Application release identifier (e.g., `"1.0.0"`) |
 
 ### `OtlpHttpJsonExporter`
 
@@ -225,12 +193,24 @@ import { OtlpHttpJsonExporter } from "@aotoki/edge-otel";
 - **Single AI SDK call per request**: No compatibility flag needed
 - **Hono**: `>= 4.0.0` (optional peer dependency)
 
-## Key Design Decisions
+## Documentation
 
-- **`SimpleSpanProcessor` only** — `BatchSpanProcessor` relies on background timers that don't survive V8 isolate lifecycle
-- **`forceFlush()` always resolves** — Export failures are logged via `console.warn`, never reject (safe for `waitUntil`)
-- **No global registration** — Provider is never registered as a global OTel singleton; tracer is passed directly via `provider.getTracer()`
-- **Timestamps as nanosecond strings** — Built via string concatenation to avoid `Number.MAX_SAFE_INTEGER` overflow
+For detailed specifications and design rationale:
+
+- [Specification Overview](SPEC.md) — project scope, user journeys, and feature list
+- [API Contracts & Types](docs/contracts.md) — public API surface, type contracts, and correctness rules
+- [Architecture](docs/architecture.md) — layer structure, directory mapping, and dependency graph
+- [Behavior Specs](docs/behavior/) — exporter, provider, middleware, context propagation, error handling
+- [Langfuse Backend Guide](docs/backends/langfuse.md) — Langfuse-specific configuration and semantic mapping
+
+## Contributing
+
+```bash
+pnpm install        # Install dependencies
+pnpm test           # Run tests
+pnpm lint           # Lint
+pnpm format:check   # Check formatting
+```
 
 ## License
 
