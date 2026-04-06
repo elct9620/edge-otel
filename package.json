@@ -1,6 +1,6 @@
 {
   "name": "@aotoki/edge-otel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lightweight OpenTelemetry SDK for V8 isolate edge runtimes",
   "type": "module",
   "exports": {
