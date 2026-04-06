@@ -61,4 +61,3 @@ Key rules:
 - **Exporter presets depend only on types** — they construct `ExporterConfig`, nothing more
 - **No circular dependencies** — dependency graph is a DAG
 - **Context manager registered inside provider** — `AsyncLocalStorageContextManager` is registered on first `createTracerProvider()` call with a once-guard
-- **`context.ts` is a side-effect import** — imported for its module-scope registration, not for exports

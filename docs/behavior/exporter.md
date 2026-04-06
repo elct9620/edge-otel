@@ -60,12 +60,12 @@ Additional headers may be supplied by the caller to satisfy backend-specific req
 
 ## Constraints
 
-| Constraint           | Value                                                                                                                             |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Maximum payload size | The exporter does not split payloads. If the endpoint rejects a flush with HTTP 413, all spans from that flush cycle are dropped. |
-| Transport            | OTLP/HTTP JSON only — gRPC and protobuf are not used                                                                              |
-| Platform APIs        | `fetch()` and `btoa()` only — no Node.js built-ins                                                                                |
-| Endpoint path        | `{endpoint}/v1/traces`                                                                                                            |
+| Constraint           | Value                                                                                                                                                                                               |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Maximum payload size | The exporter does not split payloads. If the endpoint rejects a flush with HTTP 413, all spans from that flush cycle are dropped.                                                                   |
+| Transport            | OTLP/HTTP JSON only — gRPC and protobuf are not used                                                                                                                                                |
+| Platform APIs        | `fetch()` and `btoa()` only — no Node.js built-ins                                                                                                                                                  |
+| Endpoint path        | The exporter POSTs directly to the configured `endpoint` URL as-is — no path suffix is appended. Backend presets construct the full URL (e.g., `{baseUrl}/api/public/otel/v1/traces` for Langfuse). |
 
 ---
 

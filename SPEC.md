@@ -234,6 +234,12 @@ The Refinement section defines the public API surface, TypeScript interfaces, OT
 
 See [Contracts, Types & Extensibility](docs/contracts.md)
 
+### Architecture
+
+Defines the layer structure adapted for library design (Entities → Use Cases → Interface Adapters → Frameworks & Drivers), the directory-to-layer mapping, the three entry points (Core, Hono Middleware, Langfuse Preset), and the dependency direction rules that enforce inward-only imports.
+
+See [Architecture Overview](docs/architecture.md)
+
 ---
 
 ## Backend-Specific Guidance

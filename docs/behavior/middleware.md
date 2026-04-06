@@ -68,7 +68,17 @@ To support streaming responses, the middleware exposes a **deferred flush regist
 | No promise registered  | Flush fires immediately in the unconditional cleanup phase (normal `generateText` path)                                |
 | Promise registered     | Flush is chained after the registered promise resolves: `waitUntil(deferredPromise.then(() => provider.forceFlush()))` |
 
-The handler is responsible for registering the AI SDK's `consumedStream` promise (e.g., `result.consumedStream`) via the mechanism exposed by the middleware. If the handler omits registration for a streaming response, the middleware flushes immediately and streaming spans are lost — this is an application-level error, not a middleware failure.
+The middleware exposes the deferred flush registration as a callable function with the following contract:
+
+| Aspect        | Contract                                                                                                                                                         |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Function name | `deferFlush`                                                                                                                                                     |
+| Signature     | `(promise: Promise<unknown>) => void`                                                                                                                            |
+| Behavior      | Registers a promise that the middleware awaits before calling `forceFlush()`. Only the last registered promise is used — calling `deferFlush` again replaces it. |
+| Hono variant  | Available via Hono's context variable store: `c.get('deferFlush')`. Set by the middleware before the downstream handler is invoked.                              |
+| Plain variant | Available as a property on the handler context object passed to the wrapped handler function.                                                                    |
+
+The handler is responsible for registering the AI SDK's `consumedStream` promise (e.g., `result.consumedStream`) via `deferFlush`. If the handler omits registration for a streaming response, the middleware flushes immediately and streaming spans are lost — this is an application-level error, not a middleware failure.
 
 This ensures all streaming spans, including token usage and finish reason, are present in the buffer before the flush POST is made.
 
@@ -113,6 +123,44 @@ app.use(createHonoMiddleware(provider));
 | Execution context    | The flush is registered via `ctx.waitUntil(provider.forceFlush())` using the `ctx` parameter of the fetch handler directly.                                                                                         |
 | Request information  | HTTP method and URL are available from the `Request` object and can be set as root span attributes.                                                                                                                 |
 | Environment bindings | The provider factory is called at module scope where `env` bindings are not yet available; credentials are supplied at module initialisation time via preset helpers.                                               |
+| Tracer availability  | The handler obtains the tracer directly from the provider via `provider.getTracer(scopeName)`. Unlike the Hono variant, there is no framework-level context store; the provider reference is held at module scope.  |
+| Deferred flush       | The `deferFlush` function is available as a property on the context object passed to the wrapped handler. See Deferred Flush Registration.                                                                          |
+
+Example:
+
+```typescript
+import { createTracerProvider } from "@aotoki/edge-otel";
+import { langfuseExporter } from "@aotoki/edge-otel/exporters/langfuse";
+
+const provider = createTracerProvider({
+  ...langfuseExporter({ publicKey, secretKey }),
+  serviceName: "my-app",
+});
+
+export default {
+  async fetch(request, env, ctx) {
+    const tracer = provider.getTracer("ai");
+
+    return tracer.startActiveSpan("http.request", async (span) => {
+      try {
+        const result = await generateText({
+          model,
+          experimental_telemetry: { tracer },
+        });
+        span.setStatus({ code: SpanStatusCode.OK });
+        return new Response(result.text);
+      } catch (err) {
+        span.recordException(err);
+        span.setStatus({ code: SpanStatusCode.ERROR });
+        throw err;
+      } finally {
+        span.end();
+        ctx.waitUntil(provider.forceFlush());
+      }
+    });
+  },
+};
+```
 
 ---
 
