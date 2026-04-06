@@ -65,15 +65,13 @@ Every span exported by the provider carries the following resource attributes.
 
 ## Context Manager Registration
 
-The `@opentelemetry/context-async-hooks` package is an unconditional dependency. It is imported and the `AsyncLocalStorageContextManager` is registered at **module scope** — before any request handler fires. This means the `nodejs_compat` compatibility flag (or equivalent runtime support for `AsyncLocalStorage`) is a prerequisite for deploying with this package. Without `nodejs_compat`, the module-level import fails and the Worker does not start.
+The `@opentelemetry/context-async-hooks` package is an unconditional dependency. The `AsyncLocalStorageContextManager` is registered on the first call to `createTracerProvider()`, with a guard that ensures registration happens exactly once. The `nodejs_compat` compatibility flag (or equivalent runtime support for `AsyncLocalStorage`) is a prerequisite for deploying with this package.
 
-| Timing                             | Behavior                                                                                                                     |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Module load (cold start)           | `AsyncLocalStorageContextManager` is enabled and set as the global context manager. Runs exactly once per isolate lifetime.  |
-| Subsequent requests (warm isolate) | Registration is already in place; no re-registration occurs.                                                                 |
-| `nodejs_compat` absent             | Module import fails at load time; the Worker does not start. This is a deployment-time error, not a silent runtime fallback. |
-
-Registration must occur at module scope, not inside a request handler or the factory body. Placing it inside per-request code means it runs after the first span may already have been created, and context propagation would be unreliable for that request.
+| Timing                                    | Behavior                                                                                                                     |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| First `createTracerProvider()` call       | `AsyncLocalStorageContextManager` is enabled and set as the global context manager. Runs exactly once per isolate lifetime.  |
+| Subsequent `createTracerProvider()` calls | Registration is already in place; no re-registration occurs.                                                                 |
+| `nodejs_compat` absent                    | Module import fails at load time; the Worker does not start. This is a deployment-time error, not a silent runtime fallback. |
 
 For deployments that cannot enable `nodejs_compat`, context propagation is unavailable through this package. Single AI SDK calls per request still produce correct traces (each call gets its own trace), but multi-call grouping under one trace requires manual `context.with()` threading, which is outside the scope of this factory.
 

@@ -20,8 +20,7 @@ src/
   index.ts              Core public API barrel
   types.ts              ExporterConfig, TracerProviderOptions, TracerHandle
   serializer.ts         ReadableSpan[] → ExportTraceServiceRequest (pure function)
-  provider.ts           createTracerProvider factory → TracerHandle
-  context.ts            AsyncLocalStorageContextManager module-scope registration
+  provider.ts           createTracerProvider factory → TracerHandle (registers context manager)
   exporters/
     http.ts             OtlpHttpJsonExporter (buffer + flush + POST via fetch)
     langfuse.ts         Langfuse exporter preset — separate entry point
@@ -50,9 +49,7 @@ serializer.ts         (no project deps — pure transform)
     ↑
 exporters/http.ts     → serializer.ts, types.ts
     ↑
-context.ts            (no project deps — side-effect module)
-    ↑
-provider.ts           → exporters/http.ts, context.ts, types.ts
+provider.ts           → exporters/http.ts, types.ts, @opentelemetry/context-async-hooks
 
 middleware/hono.ts    → types.ts (receives TracerHandle)
 exporters/langfuse.ts → types.ts (constructs ExporterConfig)
@@ -63,4 +60,5 @@ Key rules:
 - **Middleware does NOT depend on provider** — it receives a `TracerHandle`, not the factory module
 - **Exporters presets depend only on types** — they construct `ExporterConfig`, nothing more
 - **No circular dependencies** — dependency graph is a DAG
+- **Context manager registered inside provider** — `AsyncLocalStorageContextManager` is registered on first `createTracerProvider()` call with a once-guard
 - **`context.ts` is a side-effect import** — imported for its module-scope registration, not for exports

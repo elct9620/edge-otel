@@ -47,11 +47,11 @@ All imports point inward. Outer modules never import inner modules' peers:
 ```
 types.ts ← serializer.ts ← exporters/http.ts ← provider.ts
                                                     ↑
-middleware/hono.ts → types.ts only             context.ts (side-effect, imported by index.ts)
+middleware/hono.ts → types.ts only             @opentelemetry/context-async-hooks
 exporters/langfuse.ts → types.ts only
 ```
 
-- `context.ts` is a **side-effect module** — registers `AsyncLocalStorageContextManager` at module scope. Imported by `index.ts` (not `provider.ts`) so tests can import provider directly without triggering global state.
+- `provider.ts` registers `AsyncLocalStorageContextManager` on first `createTracerProvider()` call (once-guard, no side-effect import).
 - `middleware/hono.ts` receives a `TracerHandle`, never imports `provider.ts`.
 - `exporters/langfuse.ts` constructs an `ExporterConfig`, nothing more.
 
