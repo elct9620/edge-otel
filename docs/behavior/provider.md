@@ -106,7 +106,35 @@ The `@opentelemetry/context-async-hooks` package is an unconditional dependency.
 | Subsequent `createTracerProvider()` calls | Registration is already in place; no re-registration occurs.                                                                 |
 | `nodejs_compat` absent                    | Module import fails at load time; the Worker does not start. This is a deployment-time error, not a silent runtime fallback. |
 
-For deployments that cannot enable `nodejs_compat`, context propagation is unavailable through this package. Single AI SDK calls per request still produce correct traces (each call gets its own trace), but multi-call grouping under one trace requires manual `context.with()` threading, which is outside the scope of this factory.
+For deployments that cannot enable `nodejs_compat`, `AsyncLocalStorage`-based automatic propagation is unavailable. Single AI SDK calls per request still produce correct traces (each call gets its own trace). Multi-call grouping under one trace is still achievable as a supported fallback: wrap each AI SDK call in `context.with(ctx, ...)` using standard OTel context APIs. The factory does not provide helpers for this pattern — the application uses the OTel `context` API directly. See Context Propagation — Manual Context Threading for the full behavior specification.
+
+---
+
+## Multiple `createTracerProvider()` Calls
+
+Each call to `createTracerProvider()` creates an independent provider with its own exporter instance and in-memory span buffer. The context manager registration (above) is the only shared side-effect — it is idempotent and safe to encounter from any number of calls.
+
+| Aspect                   | Behavior                                                                                                                         |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Provider instance        | A new, independent provider is returned each time. Providers do not share state or span buffers.                                 |
+| Exporter and span buffer | Each provider has its own exporter and buffer. Spans go to the endpoint configured for the provider whose tracer created them.   |
+| Context manager          | Registered once for the isolate lifetime; subsequent calls observe the existing registration (no re-registration, no error).     |
+| Multiple endpoints       | Calling the factory twice with different endpoints creates two independent export paths; spans follow the tracer's own provider. |
+
+**Recommended pattern:** call `createTracerProvider()` once at module scope and reuse the returned provider across all requests. This avoids allocating redundant exporters in warm isolates and keeps the export path predictable.
+
+```typescript
+// Module scope — evaluated once per isolate cold start
+const provider = createTracerProvider({ ...langfuseExporter({ ... }), serviceName: "my-app" });
+
+export default {
+  fetch(req, env, ctx) {
+    const tracer = provider.getTracer("ai");
+    // ... handle request ...
+    ctx.waitUntil(provider.forceFlush());
+  },
+};
+```
 
 ---
 
