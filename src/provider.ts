@@ -1,4 +1,4 @@
-import { context, trace } from "@opentelemetry/api";
+import { context } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
   SimpleSpanProcessor,
@@ -6,7 +6,7 @@ import {
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { OtlpHttpJsonExporter } from "./exporters/http.js";
-import type { TracerProviderOptions, TracerHandle } from "./types.js";
+import type { TracerProviderOptions, TracerProvider } from "./types.js";
 
 const DEFAULT_SERVICE_NAME = "cloudflare-worker";
 
@@ -22,10 +22,11 @@ function ensureContextManager(): void {
 
 export function createTracerProvider(
   options: TracerProviderOptions,
-): TracerHandle {
+): TracerProvider {
   ensureContextManager();
   const resource = resourceFromAttributes({
     "service.name": options.serviceName ?? DEFAULT_SERVICE_NAME,
+    ...(options.resourceAttributes ?? {}),
   });
 
   const exporter = new OtlpHttpJsonExporter({
@@ -38,15 +39,14 @@ export function createTracerProvider(
     spanProcessors: [new SimpleSpanProcessor(exporter)],
   });
 
-  const tracer = provider.getTracer(options.scopeName ?? "ai");
-
   return {
-    tracer,
-    flush: () => exporter.forceFlush(),
-    rootSpan: (name, attributes) => {
-      const span = tracer.startSpan(name, { attributes });
-      const ctx = trace.setSpan(context.active(), span);
-      return { span, ctx };
+    getTracer: (scopeName) => provider.getTracer(scopeName),
+    forceFlush: async () => {
+      try {
+        await exporter.forceFlush();
+      } catch (err) {
+        console.warn("[edge-otel] forceFlush failed:", err);
+      }
     },
   };
 }

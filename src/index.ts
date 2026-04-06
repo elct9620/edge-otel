@@ -3,5 +3,5 @@ export { OtlpHttpJsonExporter } from "./exporters/http.js";
 export type {
   ExporterConfig,
   TracerProviderOptions,
-  TracerHandle,
+  TracerProvider,
 } from "./types.js";

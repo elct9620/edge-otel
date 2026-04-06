@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { context as otelContext, trace } from "@opentelemetry/api";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { createTracerProvider } from "../src/provider.js";
 
@@ -26,37 +25,30 @@ describe("createTracerProvider", () => {
   });
 
   // -------------------------------------------------------------------------
-  // TracerHandle shape
+  // TracerProvider shape
   // -------------------------------------------------------------------------
 
-  describe("TracerHandle shape", () => {
-    it("returns an object with tracer, flush, and rootSpan properties", () => {
-      const handle = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+  describe("TracerProvider shape", () => {
+    it("returns an object with getTracer and forceFlush methods", () => {
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
 
-      expect(handle).toHaveProperty("tracer");
-      expect(handle).toHaveProperty("flush");
-      expect(handle).toHaveProperty("rootSpan");
+      expect(typeof provider.getTracer).toBe("function");
+      expect(typeof provider.forceFlush).toBe("function");
     });
 
-    it("tracer has a startSpan method", () => {
-      const { tracer } = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+    it("getTracer returns a tracer with a startSpan method", () => {
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const tracer = provider.getTracer("ai");
 
       expect(typeof tracer.startSpan).toBe("function");
     });
 
-    it("flush is a function returning a Promise", () => {
+    it("forceFlush is a function returning a Promise", () => {
       vi.stubGlobal("fetch", makeFetchStub());
-      const { flush } = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
 
-      expect(typeof flush).toBe("function");
-      const result = flush();
+      const result = provider.forceFlush();
       expect(result).toBeInstanceOf(Promise);
-    });
-
-    it("rootSpan is a function", () => {
-      const { rootSpan } = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
-
-      expect(typeof rootSpan).toBe("function");
     });
   });
 
@@ -65,12 +57,11 @@ describe("createTracerProvider", () => {
   // -------------------------------------------------------------------------
 
   describe("instrumentation scope name", () => {
-    it("tracer scope name is exactly 'ai'", () => {
+    it("tracer scope name matches the provided scopeName argument", () => {
       vi.stubGlobal("fetch", makeFetchStub());
-      const { tracer } = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const tracer = provider.getTracer("ai");
 
-      // Start and end a span to make it readable; the instrumentation scope
-      // name is accessible directly on the ReadableSpan cast.
       const span = tracer.startSpan("probe");
       const readableSpan = span as unknown as ReadableSpan;
       expect(readableSpan.instrumentationScope.name).toBe("ai");
@@ -78,12 +69,10 @@ describe("createTracerProvider", () => {
       span.end();
     });
 
-    it("uses custom scopeName when provided in options", () => {
+    it("getTracer uses the provided scopeName", () => {
       vi.stubGlobal("fetch", makeFetchStub());
-      const { tracer } = createTracerProvider({
-        endpoint: DEFAULT_ENDPOINT,
-        scopeName: "my-custom-scope",
-      });
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const tracer = provider.getTracer("my-custom-scope");
 
       const span = tracer.startSpan("probe");
       const readableSpan = span as unknown as ReadableSpan;
@@ -99,7 +88,8 @@ describe("createTracerProvider", () => {
 
   describe("resource attributes", () => {
     it("uses 'cloudflare-worker' as the default service name", () => {
-      const { tracer } = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const tracer = provider.getTracer("ai");
 
       const span = tracer.startSpan("probe");
       const readableSpan = span as unknown as ReadableSpan;
@@ -111,10 +101,11 @@ describe("createTracerProvider", () => {
     });
 
     it("uses the provided serviceName when specified", () => {
-      const { tracer } = createTracerProvider({
+      const provider = createTracerProvider({
         endpoint: DEFAULT_ENDPOINT,
         serviceName: "my-custom-service",
       });
+      const tracer = provider.getTracer("ai");
 
       const span = tracer.startSpan("probe");
       const readableSpan = span as unknown as ReadableSpan;
@@ -124,112 +115,92 @@ describe("createTracerProvider", () => {
 
       span.end();
     });
-  });
 
-  // -------------------------------------------------------------------------
-  // rootSpan helper
-  // -------------------------------------------------------------------------
-
-  describe("rootSpan helper", () => {
-    it("returns an object with span and ctx properties", () => {
-      const { rootSpan } = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
-
-      const result = rootSpan("test-span");
-      expect(result).toHaveProperty("span");
-      expect(result).toHaveProperty("ctx");
-
-      result.span.end();
-    });
-
-    it("span has end and setAttribute methods", () => {
-      const { rootSpan } = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
-
-      const { span } = rootSpan("test-span");
-      expect(typeof span.end).toBe("function");
-      expect(typeof span.setAttribute).toBe("function");
-
-      span.end();
-    });
-
-    it("ctx is a valid Context (span is retrievable from it)", () => {
-      const { rootSpan } = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
-
-      const { span, ctx } = rootSpan("test-span");
-      const retrievedSpan = trace.getSpan(ctx);
-      expect(retrievedSpan).toBe(span);
-
-      span.end();
-    });
-
-    it("span name matches the provided name", () => {
-      const { rootSpan } = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
-
-      const { span } = rootSpan("my-root-span");
-      const readableSpan = span as unknown as ReadableSpan;
-      expect(readableSpan.name).toBe("my-root-span");
-
-      span.end();
-    });
-
-    it("custom attributes are set on the span", () => {
-      const { rootSpan } = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
-
-      const { span } = rootSpan("attributed-span", {
-        "gen_ai.system": "openai",
-        "http.method": "POST",
+    it("extra keys in resourceAttributes appear on the span resource", () => {
+      const provider = createTracerProvider({
+        endpoint: DEFAULT_ENDPOINT,
+        resourceAttributes: { "deployment.environment.name": "production" },
       });
+      const tracer = provider.getTracer("ai");
+
+      const span = tracer.startSpan("probe");
       const readableSpan = span as unknown as ReadableSpan;
-      expect(readableSpan.attributes["gen_ai.system"]).toBe("openai");
-      expect(readableSpan.attributes["http.method"]).toBe("POST");
+      expect(
+        readableSpan.resource.attributes["deployment.environment.name"],
+      ).toBe("production");
 
       span.end();
     });
 
-    it("ctx is based on the currently active context", () => {
-      const { rootSpan } = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+    it("resourceAttributes overrides serviceName when both supply service.name", () => {
+      const provider = createTracerProvider({
+        endpoint: DEFAULT_ENDPOINT,
+        serviceName: "original",
+        resourceAttributes: { "service.name": "override" },
+      });
+      const tracer = provider.getTracer("ai");
 
-      // The returned ctx must reflect the active context at call time.
-      const activeBefore = otelContext.active();
-      const { ctx } = rootSpan("ctx-check");
-      // ctx must differ from the root active context only in the span attached
-      expect(ctx).not.toBe(activeBefore);
+      const span = tracer.startSpan("probe");
+      const readableSpan = span as unknown as ReadableSpan;
+      expect(readableSpan.resource.attributes["service.name"]).toBe("override");
+
+      span.end();
     });
   });
 
   // -------------------------------------------------------------------------
-  // flush delegation
+  // forceFlush delegation
   // -------------------------------------------------------------------------
 
-  describe("flush delegation", () => {
-    it("flush() resolves to undefined", async () => {
+  describe("forceFlush delegation", () => {
+    it("forceFlush() resolves to undefined", async () => {
       vi.stubGlobal("fetch", makeFetchStub());
-      const handle = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
 
-      await expect(handle.flush()).resolves.toBeUndefined();
+      await expect(provider.forceFlush()).resolves.toBeUndefined();
     });
 
-    it("flush() triggers fetch after spans have been exported", async () => {
+    it("forceFlush() triggers fetch after spans have been exported", async () => {
       const fetchStub = makeFetchStub();
       vi.stubGlobal("fetch", fetchStub);
 
-      const handle = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
-      const { span } = handle.rootSpan("exported-span");
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const tracer = provider.getTracer("ai");
+      const span = tracer.startSpan("exported-span");
       span.end(); // ending a span triggers SimpleSpanProcessor.onEnd → exporter.export()
 
-      await handle.flush();
+      await provider.forceFlush();
 
       expect(fetchStub).toHaveBeenCalledOnce();
     });
 
-    it("flush() does not call fetch when no spans were created", async () => {
+    it("forceFlush() does not call fetch when no spans were created", async () => {
       const fetchStub = makeFetchStub();
       vi.stubGlobal("fetch", fetchStub);
 
-      const handle = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
 
-      await handle.flush();
+      await provider.forceFlush();
 
       expect(fetchStub).not.toHaveBeenCalled();
+    });
+
+    it("forceFlush() resolves even when the exporter fails", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockRejectedValue(new Error("network error")),
+      );
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const tracer = provider.getTracer("ai");
+      const span = tracer.startSpan("failing-span");
+      span.end();
+
+      await expect(provider.forceFlush()).resolves.toBeUndefined();
+      expect(warnSpy).toHaveBeenCalled();
+
+      warnSpy.mockRestore();
     });
   });
 });

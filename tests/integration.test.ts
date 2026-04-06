@@ -5,11 +5,11 @@
  * with the Hono middleware managing root span lifecycle and context propagation.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { context as otelContext } from "@opentelemetry/api";
+import { context as otelContext, trace } from "@opentelemetry/api";
 import { Hono } from "hono";
 import { createTracerProvider } from "../src/index.js";
 import { createHonoMiddleware } from "../src/middleware/hono.js";
-import { langfusePreset } from "../src/exporters/langfuse.js";
+import { langfuseExporter } from "../src/exporters/langfuse.js";
 import type { ExportTraceServiceRequest } from "../src/serializer.js";
 
 // ---------------------------------------------------------------------------
@@ -57,7 +57,6 @@ function createExecutionCtx() {
 function requestWith(
   app: Hono,
   path: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   executionCtx: ReturnType<typeof createExecutionCtx>["ctx"],
 ) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -82,15 +81,15 @@ describe("Integration — full request lifecycle", () => {
       const { mockFetch, calls } = createFetchCaptor();
       vi.stubGlobal("fetch", mockFetch);
 
-      const handle = createTracerProvider({
+      const provider = createTracerProvider({
         endpoint: DEFAULT_ENDPOINT,
         serviceName: "integration-test",
       });
 
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/test", (c) => {
-        const tracer = handle.tracer;
+        const tracer = provider.getTracer("ai");
         // Create a child span inside the active root context
         const child = tracer.startSpan("child-operation");
         child.setAttribute("custom.key", "custom-value");
@@ -159,14 +158,15 @@ describe("Integration — full request lifecycle", () => {
       const { mockFetch, calls } = createFetchCaptor();
       vi.stubGlobal("fetch", mockFetch);
 
-      const handle = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const tracer = provider.getTracer("ai");
 
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/multi", (c) => {
         // Simulate 3 sequential AI SDK-like calls
         for (let i = 0; i < 3; i++) {
-          const span = handle.tracer.startSpan(`ai.call.${i}`);
+          const span = tracer.startSpan(`ai.call.${i}`);
           span.end();
         }
         return c.text("ok");
@@ -209,10 +209,10 @@ describe("Integration — full request lifecycle", () => {
       vi.stubGlobal("fetch", mockFetch);
 
       vi.spyOn(console, "error").mockImplementation(() => {});
-      const handle = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
 
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/boom", () => {
         throw new Error("something went wrong");
       });
@@ -256,20 +256,22 @@ describe("Integration — full request lifecycle", () => {
       const { mockFetch, calls } = createFetchCaptor();
       vi.stubGlobal("fetch", mockFetch);
 
-      const config = langfusePreset({
+      const config = langfuseExporter({
         publicKey: "pk-test",
         secretKey: "sk-test",
       });
 
-      const handle = createTracerProvider(config);
+      const provider = createTracerProvider(config);
+      const tracer = provider.getTracer("ai");
 
       // Create and end a span to populate the buffer
-      const { span, ctx: spanCtx } = handle.rootSpan("langfuse-probe");
+      const span = tracer.startSpan("langfuse-probe");
+      const spanCtx = trace.setSpan(otelContext.active(), span);
       await otelContext.with(spanCtx, async () => {
         span.end();
       });
 
-      await handle.flush();
+      await provider.forceFlush();
 
       expect(mockFetch).toHaveBeenCalledOnce();
 
@@ -292,35 +294,83 @@ describe("Integration — full request lifecycle", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Scenario 5: Empty flush does not call fetch
+  // Scenario 5: Langfuse environment and release flow through as resource attributes
   // -------------------------------------------------------------------------
 
-  describe("Scenario 5: empty flush skips fetch", () => {
+  describe("Scenario 5: Langfuse environment and release appear as resource attributes", () => {
+    it("resourceSpans[0].resource.attributes contains deployment.environment.name and service.version", async () => {
+      const { mockFetch, calls } = createFetchCaptor();
+      vi.stubGlobal("fetch", mockFetch);
+
+      const config = langfuseExporter({
+        publicKey: "pk-test",
+        secretKey: "sk-test",
+        environment: "production",
+        release: "1.0.0",
+      });
+
+      const provider = createTracerProvider(config);
+      const tracer = provider.getTracer("ai");
+
+      const span = tracer.startSpan("env-release-probe");
+      const spanCtx = trace.setSpan(otelContext.active(), span);
+      await otelContext.with(spanCtx, async () => {
+        span.end();
+      });
+
+      await provider.forceFlush();
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+
+      const otlp = parseOtlpBody(calls[0]);
+      const resourceAttrs = otlp.resourceSpans[0].resource.attributes;
+
+      const envAttr = resourceAttrs.find(
+        (a) => a.key === "deployment.environment.name",
+      );
+      expect(envAttr).toBeDefined();
+      expect(envAttr?.value.stringValue).toBe("production");
+
+      const versionAttr = resourceAttrs.find(
+        (a) => a.key === "service.version",
+      );
+      expect(versionAttr).toBeDefined();
+      expect(versionAttr?.value.stringValue).toBe("1.0.0");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Scenario 6: Empty flush does not call fetch
+  // -------------------------------------------------------------------------
+
+  describe("Scenario 6: empty flush skips fetch", () => {
     it("does not call fetch when no spans have been created", async () => {
       const { mockFetch } = createFetchCaptor();
       vi.stubGlobal("fetch", mockFetch);
 
-      const handle = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
 
       // Flush immediately without creating any spans
-      await handle.flush();
+      await provider.forceFlush();
 
       expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 
   // -------------------------------------------------------------------------
-  // Scenario 6: Attribute type fidelity in OTLP payload
+  // Scenario 7: Attribute type fidelity in OTLP payload
   // -------------------------------------------------------------------------
 
-  describe("Scenario 6: attribute type fidelity in OTLP payload", () => {
+  describe("Scenario 7: attribute type fidelity in OTLP payload", () => {
     it("encodes string, integer, float, and boolean attributes with correct OTLP value wrappers", async () => {
       const { mockFetch, calls } = createFetchCaptor();
       vi.stubGlobal("fetch", mockFetch);
 
-      const handle = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const tracer = provider.getTracer("ai");
 
-      const { span, ctx: spanCtx } = handle.rootSpan("attribute-fidelity");
+      const span = tracer.startSpan("attribute-fidelity");
+      const spanCtx = trace.setSpan(otelContext.active(), span);
       await otelContext.with(spanCtx, async () => {
         span.setAttribute("str.attr", "hello");
         span.setAttribute("int.attr", 42);
@@ -329,7 +379,7 @@ describe("Integration — full request lifecycle", () => {
         span.end();
       });
 
-      await handle.flush();
+      await provider.forceFlush();
 
       expect(mockFetch).toHaveBeenCalledOnce();
       const otlp = parseOtlpBody(calls[0]);

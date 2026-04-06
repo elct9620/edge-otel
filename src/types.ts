@@ -1,4 +1,4 @@
-import type { Tracer, Span, Context } from "@opentelemetry/api";
+import type { Tracer } from "@opentelemetry/api";
 
 export interface ExporterConfig {
   endpoint: string;
@@ -8,13 +8,10 @@ export interface ExporterConfig {
 export interface TracerProviderOptions extends ExporterConfig {
   serviceName?: string;
   scopeName?: string;
+  resourceAttributes?: Record<string, string>;
 }
 
-export interface TracerHandle {
-  tracer: Tracer;
-  flush: () => Promise<void>;
-  rootSpan: (
-    name: string,
-    attributes?: Record<string, string>,
-  ) => { span: Span; ctx: Context };
+export interface TracerProvider {
+  getTracer(scopeName: string): Tracer;
+  forceFlush(): Promise<void>;
 }

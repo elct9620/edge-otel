@@ -2,29 +2,33 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { SpanStatusCode } from "@opentelemetry/api";
 import { Hono } from "hono";
 import { createHonoMiddleware } from "../../src/middleware/hono.js";
-import type { TracerHandle } from "../../src/types.js";
+import type { TracerProvider } from "../../src/types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function createMockHandle() {
+function createMockProvider() {
   const mockSpan = {
     end: vi.fn(),
     setStatus: vi.fn(),
     recordException: vi.fn(),
     setAttribute: vi.fn(),
   };
-  const mockCtx = {};
-  const flushFn = vi.fn().mockResolvedValue(undefined);
 
-  const handle: TracerHandle = {
-    tracer: { startSpan: vi.fn() } as any, // eslint-disable-line @typescript-eslint/no-explicit-any
-    flush: flushFn,
-    rootSpan: vi.fn().mockReturnValue({ span: mockSpan, ctx: mockCtx }),
+  const mockTracer = {
+    startSpan: vi.fn().mockReturnValue(mockSpan),
+    startActiveSpan: vi.fn(),
   };
 
-  return { handle, mockSpan, mockCtx, flushFn };
+  const forceFlushFn = vi.fn().mockResolvedValue(undefined);
+
+  const provider: TracerProvider = {
+    getTracer: vi.fn().mockReturnValue(mockTracer),
+    forceFlush: forceFlushFn,
+  };
+
+  return { provider, mockTracer, mockSpan, forceFlushFn };
 }
 
 function createExecutionCtx() {
@@ -52,15 +56,15 @@ function requestWith(
 // ---------------------------------------------------------------------------
 
 describe("createHonoMiddleware", () => {
-  let handle: TracerHandle;
-  let mockSpan: ReturnType<typeof createMockHandle>["mockSpan"];
-  let flushFn: ReturnType<typeof createMockHandle>["flushFn"];
+  let provider: TracerProvider;
+  let mockSpan: ReturnType<typeof createMockProvider>["mockSpan"];
+  let forceFlushFn: ReturnType<typeof createMockProvider>["forceFlushFn"];
 
   beforeEach(() => {
-    const mocks = createMockHandle();
-    handle = mocks.handle;
+    const mocks = createMockProvider();
+    provider = mocks.provider;
     mockSpan = mocks.mockSpan;
-    flushFn = mocks.flushFn;
+    forceFlushFn = mocks.forceFlushFn;
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -73,52 +77,80 @@ describe("createHonoMiddleware", () => {
   // -------------------------------------------------------------------------
 
   describe("root span creation", () => {
-    it("calls rootSpan with the default name 'http.request' when no options provided", async () => {
+    it("calls startSpan with the default name 'http.request' when no options provided", async () => {
+      const { mockTracer } = createMockProvider();
+      const localProvider: TracerProvider = {
+        getTracer: vi.fn().mockReturnValue(mockTracer),
+        forceFlush: vi.fn().mockResolvedValue(undefined),
+      };
+
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(localProvider));
       app.get("/test", (c) => c.text("ok"));
 
       await requestWith(app, "/test", createExecutionCtx());
 
-      expect(handle.rootSpan).toHaveBeenCalledWith("http.request", undefined);
+      expect(mockTracer.startSpan).toHaveBeenCalledWith("http.request", {
+        attributes: undefined,
+      });
     });
 
-    it("calls rootSpan with a custom span name when provided in options", async () => {
+    it("calls startSpan with a custom span name when provided in options", async () => {
+      const { mockTracer } = createMockProvider();
+      const localProvider: TracerProvider = {
+        getTracer: vi.fn().mockReturnValue(mockTracer),
+        forceFlush: vi.fn().mockResolvedValue(undefined),
+      };
+
       const app = new Hono();
       app.use(
         "*",
-        createHonoMiddleware(handle, { spanName: "my.custom.span" }),
+        createHonoMiddleware(localProvider, { spanName: "my.custom.span" }),
       );
       app.get("/test", (c) => c.text("ok"));
 
       await requestWith(app, "/test", createExecutionCtx());
 
-      expect(handle.rootSpan).toHaveBeenCalledWith("my.custom.span", undefined);
+      expect(mockTracer.startSpan).toHaveBeenCalledWith("my.custom.span", {
+        attributes: undefined,
+      });
     });
 
-    it("calls rootSpan with custom attributes when provided in options", async () => {
+    it("calls startSpan with custom attributes when provided in options", async () => {
+      const { mockTracer } = createMockProvider();
+      const localProvider: TracerProvider = {
+        getTracer: vi.fn().mockReturnValue(mockTracer),
+        forceFlush: vi.fn().mockResolvedValue(undefined),
+      };
       const attributes = { "http.method": "GET", "service.version": "1.0.0" };
+
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle, { attributes }));
+      app.use("*", createHonoMiddleware(localProvider, { attributes }));
       app.get("/test", (c) => c.text("ok"));
 
       await requestWith(app, "/test", createExecutionCtx());
 
-      expect(handle.rootSpan).toHaveBeenCalledWith("http.request", attributes);
+      expect(mockTracer.startSpan).toHaveBeenCalledWith("http.request", {
+        attributes,
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Provider scope name
+  // -------------------------------------------------------------------------
+
+  describe("provider scope name", () => {
+    it("calls getTracer with the default scope name 'ai'", () => {
+      createHonoMiddleware(provider);
+
+      expect(provider.getTracer).toHaveBeenCalledWith("ai");
     });
 
-    it("calls rootSpan with both custom name and attributes when both provided", async () => {
-      const attributes = { "gen_ai.system": "openai" };
-      const app = new Hono();
-      app.use(
-        "*",
-        createHonoMiddleware(handle, { spanName: "ai.request", attributes }),
-      );
-      app.get("/test", (c) => c.text("ok"));
+    it("calls getTracer with a custom scope name when provided in options", () => {
+      createHonoMiddleware(provider, { scopeName: "my-service" });
 
-      await requestWith(app, "/test", createExecutionCtx());
-
-      expect(handle.rootSpan).toHaveBeenCalledWith("ai.request", attributes);
+      expect(provider.getTracer).toHaveBeenCalledWith("my-service");
     });
   });
 
@@ -131,7 +163,7 @@ describe("createHonoMiddleware", () => {
       let capturedTracer: unknown;
 
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/test", (c) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         capturedTracer = (c as any).get("tracer");
@@ -140,7 +172,10 @@ describe("createHonoMiddleware", () => {
 
       await requestWith(app, "/test", createExecutionCtx());
 
-      expect(capturedTracer).toBe(handle.tracer);
+      // The tracer set on context is the one returned by provider.getTracer('ai')
+      expect(capturedTracer).toBe(
+        (provider.getTracer as ReturnType<typeof vi.fn>).mock.results[0].value,
+      );
     });
   });
 
@@ -153,7 +188,7 @@ describe("createHonoMiddleware", () => {
       const boom = new Error("something went wrong");
 
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/test", () => {
         throw boom;
       });
@@ -167,7 +202,7 @@ describe("createHonoMiddleware", () => {
       const boom = new Error("something went wrong");
 
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/test", () => {
         throw boom;
       });
@@ -182,7 +217,7 @@ describe("createHonoMiddleware", () => {
 
     it("results in a 500 response when the handler throws", async () => {
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/test", () => {
         throw new Error("crash");
       });
@@ -200,7 +235,7 @@ describe("createHonoMiddleware", () => {
   describe("span lifecycle", () => {
     it("calls span.end on the success path", async () => {
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/test", (c) => c.text("ok"));
 
       await requestWith(app, "/test", createExecutionCtx());
@@ -210,7 +245,7 @@ describe("createHonoMiddleware", () => {
 
     it("calls span.end even when the handler throws", async () => {
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/test", () => {
         throw new Error("crash");
       });
@@ -222,7 +257,7 @@ describe("createHonoMiddleware", () => {
 
     it("calls span.setStatus with OK on the success path", async () => {
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/test", (c) => c.text("ok"));
 
       await requestWith(app, "/test", createExecutionCtx());
@@ -238,34 +273,34 @@ describe("createHonoMiddleware", () => {
   // -------------------------------------------------------------------------
 
   describe("flush registration", () => {
-    it("calls handle.flush() on the success path", async () => {
+    it("calls provider.forceFlush() on the success path", async () => {
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/test", (c) => c.text("ok"));
 
       await requestWith(app, "/test", createExecutionCtx());
 
-      expect(flushFn).toHaveBeenCalledOnce();
+      expect(forceFlushFn).toHaveBeenCalledOnce();
     });
 
-    it("calls handle.flush() even when the handler throws", async () => {
+    it("calls provider.forceFlush() even when the handler throws", async () => {
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/test", () => {
         throw new Error("crash");
       });
 
       await requestWith(app, "/test", createExecutionCtx());
 
-      expect(flushFn).toHaveBeenCalledOnce();
+      expect(forceFlushFn).toHaveBeenCalledOnce();
     });
 
-    it("registers flush promise with waitUntil on the success path", async () => {
+    it("registers forceFlush promise with waitUntil on the success path", async () => {
       const flushResult = Promise.resolve(undefined);
-      flushFn.mockReturnValue(flushResult);
+      forceFlushFn.mockReturnValue(flushResult);
 
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/test", (c) => c.text("ok"));
 
       const executionCtx = createExecutionCtx();
@@ -274,15 +309,110 @@ describe("createHonoMiddleware", () => {
       expect(executionCtx.waitUntil).toHaveBeenCalledWith(flushResult);
     });
 
-    it("registers flush promise with waitUntil even when the handler throws", async () => {
+    it("registers forceFlush promise with waitUntil even when the handler throws", async () => {
       const flushResult = Promise.resolve(undefined);
-      flushFn.mockReturnValue(flushResult);
+      forceFlushFn.mockReturnValue(flushResult);
 
       const app = new Hono();
-      app.use("*", createHonoMiddleware(handle));
+      app.use("*", createHonoMiddleware(provider));
       app.get("/test", () => {
         throw new Error("crash");
       });
+
+      const executionCtx = createExecutionCtx();
+      await requestWith(app, "/test", executionCtx);
+
+      expect(executionCtx.waitUntil).toHaveBeenCalledWith(flushResult);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // deferFlush
+  // -------------------------------------------------------------------------
+
+  describe("deferFlush", () => {
+    it("exposes deferFlush function via Hono context before calling next()", async () => {
+      let capturedDeferFlush: unknown;
+
+      const app = new Hono();
+      app.use("*", createHonoMiddleware(provider));
+      app.get("/test", (c) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        capturedDeferFlush = (c as any).get("deferFlush");
+        return c.text("ok");
+      });
+
+      await requestWith(app, "/test", createExecutionCtx());
+
+      expect(capturedDeferFlush).toBeTypeOf("function");
+    });
+
+    it("chains forceFlush after the deferred promise when deferFlush is called", async () => {
+      let resolveDeferredStream!: () => void;
+      const deferredStream = new Promise<void>((resolve) => {
+        resolveDeferredStream = resolve;
+      });
+
+      const app = new Hono();
+      app.use("*", createHonoMiddleware(provider));
+      app.get("/test", (c) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (c as any).get("deferFlush")(deferredStream);
+        return c.text("ok");
+      });
+
+      const executionCtx = createExecutionCtx();
+      await requestWith(app, "/test", executionCtx);
+
+      // forceFlush should not have been called yet — it's chained after the deferred promise
+      expect(forceFlushFn).not.toHaveBeenCalled();
+
+      // The promise passed to waitUntil should resolve only after the stream resolves
+      resolveDeferredStream();
+      // Flush the microtask queue so the .then() chain executes
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(forceFlushFn).toHaveBeenCalledOnce();
+    });
+
+    it("uses the last registered promise when deferFlush is called multiple times", async () => {
+      let resolveSecond!: () => void;
+      const firstPromise = Promise.resolve();
+      const secondPromise = new Promise<void>((resolve) => {
+        resolveSecond = resolve;
+      });
+
+      const app = new Hono();
+      app.use("*", createHonoMiddleware(provider));
+      app.get("/test", (c) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const deferFlush = (c as any).get("deferFlush");
+        deferFlush(firstPromise);
+        deferFlush(secondPromise);
+        return c.text("ok");
+      });
+
+      const executionCtx = createExecutionCtx();
+      await requestWith(app, "/test", executionCtx);
+
+      // forceFlush not yet called — waiting on secondPromise
+      expect(forceFlushFn).not.toHaveBeenCalled();
+
+      resolveSecond();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(forceFlushFn).toHaveBeenCalledOnce();
+    });
+
+    it("flushes immediately (no deferred promise) when deferFlush is never called", async () => {
+      const flushResult = Promise.resolve(undefined);
+      forceFlushFn.mockReturnValue(flushResult);
+
+      const app = new Hono();
+      app.use("*", createHonoMiddleware(provider));
+      app.get("/test", (c) => c.text("ok"));
 
       const executionCtx = createExecutionCtx();
       await requestWith(app, "/test", executionCtx);
