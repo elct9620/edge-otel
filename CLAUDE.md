@@ -52,14 +52,14 @@ exporters/langfuse.ts → types.ts only
 ```
 
 - `provider.ts` registers `AsyncLocalStorageContextManager` on first `createTracerProvider()` call (once-guard, no side-effect import).
-- `middleware/hono.ts` receives a `TracerHandle`, never imports `provider.ts`.
+- `middleware/hono.ts` receives a `TracerProvider`, never imports `provider.ts`.
 - `exporters/langfuse.ts` constructs an `ExporterConfig`, nothing more.
 
 ### Key Constraints
 
 - **No global registration** — never call `provider.register()`; pass tracer directly
 - **SimpleSpanProcessor only** — no `BatchSpanProcessor` (no background timers in isolates)
-- **`flush()` always resolves** — telemetry failures are logged via `console.warn`, never reject
+- **`forceFlush()` always resolves** — telemetry failures are logged via `console.warn`, never reject
 - **Use `forceFlush()` per request**, not `shutdown()`; register via `ctx.waitUntil()`
 - **Timestamps as nanosecond decimal strings** — string concatenation, not arithmetic (avoids `MAX_SAFE_INTEGER` overflow)
 - **`ExporterConfig.endpoint` is a full URL** — the exporter uses it as-is; presets construct the complete path

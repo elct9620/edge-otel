@@ -12,18 +12,18 @@ This document defines the public API surface, the TypeScript interfaces that imp
 
 The package exposes exactly the following identifiers at its public boundary. Internal types, helper functions, and the span processor wiring are not part of the public API.
 
-| Export                  | Kind      | Purpose                                                                                                                      |
-| ----------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `createTracerProvider`  | Function  | Factory: accepts configuration and returns a `TracerHandle`                                                                  |
-| `TracerHandle`          | Interface | The object returned by the factory; consumed by application code                                                             |
-| `TracerProviderOptions` | Interface | Configuration accepted by the factory; extends the exporter config with `serviceName`, `scopeName`, and `resourceAttributes` |
-| `ExporterConfig`        | Interface | Endpoint and headers configuration for the OTLP/HTTP exporter                                                                |
-| `OtlpHttpJsonExporter`  | Class     | The OTLP/HTTP JSON exporter; exported for advanced use (custom processor wiring, multiple backends)                          |
-| `createHonoMiddleware`  | Function  | Returns a Hono middleware function that manages root span lifecycle for a complete Hono request                              |
+| Export                  | Kind      | Purpose                                                                                                        |
+| ----------------------- | --------- | -------------------------------------------------------------------------------------------------------------- |
+| `createTracerProvider`  | Function  | Factory: accepts configuration and returns a `TracerProvider`                                                  |
+| `TracerProvider`        | Interface | The object returned by the factory; consumed by application code via `getTracer()` and `forceFlush()`          |
+| `TracerProviderOptions` | Interface | Configuration accepted by the factory; extends the exporter config with `serviceName` and `resourceAttributes` |
+| `ExporterConfig`        | Interface | Endpoint and headers configuration for the OTLP/HTTP exporter                                                  |
+| `OtlpHttpJsonExporter`  | Class     | The OTLP/HTTP JSON exporter; exported for advanced use (custom processor wiring, multiple backends)            |
+| `createHonoMiddleware`  | Function  | Returns a Hono middleware function that manages root span lifecycle for a complete Hono request                |
 
 `OtlpHttpJsonExporter` is exported because implementers wiring multiple backends or a custom `SimpleSpanProcessor` need direct access to the exporter instance. It is not required for typical single-backend use.
 
-Backend presets (e.g., a Langfuse preset) may provide convenience wrappers that construct `ExporterConfig` from backend-specific credentials and supply default endpoint URLs and required HTTP headers. These presets are not part of the core public API surface.
+Backend presets (e.g., a Langfuse preset) may provide convenience wrappers that construct `ExporterConfig` from backend-specific credentials and supply default endpoint URLs and required HTTP headers. A preset may return additional fields beyond `ExporterConfig` — for example, a `resourceAttributes` field that encodes backend-specific metadata such as deployment environment and release version. The caller spreads the preset return value into `createTracerProvider`, which accepts these extra fields natively through `TracerProviderOptions`. These presets are not part of the core public API surface.
 
 ---
 
@@ -38,11 +38,11 @@ Backend presets (e.g., a Langfuse preset) may provide convenience wrappers that 
 
 `TracerProviderOptions` extends `ExporterConfig` with additional fields.
 
-| Field                | Type                     | Required | Default               | Description                                                                                                           |
-| -------------------- | ------------------------ | -------- | --------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `serviceName`        | `string`                 | No       | `'cloudflare-worker'` | Value of the `service.name` OTel resource attribute attached to all spans.                                            |
-| `scopeName`          | `string`                 | No       | `'ai'`                | Instrumentation scope name passed to `provider.getTracer()`. Default matches AI SDK convention.                       |
-| `resourceAttributes` | `Record<string, string>` | No       | `{}`                  | Additional OTel resource attributes merged into the resource. Used for backend metadata (e.g., environment, release). |
+| Field                | Type                     | Required | Default               | Description                                                                                                                                                                                                                                                                                                                |
+| -------------------- | ------------------------ | -------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serviceName`        | `string`                 | No       | `'cloudflare-worker'` | Value of the `service.name` OTel resource attribute attached to all spans.                                                                                                                                                                                                                                                 |
+| `scopeName`          | `string`                 | No       | `'ai'`                | Instrumentation scope name passed to `provider.getTracer(scopeName)` internally. Must be `'ai'` for AI SDK spans — the convention established by the Vercel AI SDK. Override only when integrating a non-AI-SDK tracer with a different scope name convention.                                                             |
+| `resourceAttributes` | `Record<string, string>` | No       | `{}`                  | Additional OTel resource attributes merged into the resource. Used for backend metadata (e.g., environment, release). When a backend preset also returns `resourceAttributes`, the caller's explicit values override the preset's values — the last write for any given key wins under JavaScript object spread semantics. |
 
 TypeScript interface:
 
@@ -61,33 +61,25 @@ interface TracerProviderOptions extends ExporterConfig {
 
 ---
 
-### Handle Contract
+### Provider Contract
 
-`TracerHandle` is the object returned by `createTracerProvider`. It contains every member an application needs to instrument AI SDK calls, create custom spans, and flush completed spans after the HTTP response is sent.
+`TracerProvider` is the object returned by `createTracerProvider`. It exposes the two methods an application needs to obtain a tracer for instrumentation and to flush completed spans after the HTTP response is sent.
 
-| Member     | Type                                                                                  | Purpose                                                                                                                                                                                            |
-| ---------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tracer`   | `Tracer` (from `@opentelemetry/api`)                                                  | Pass to `experimental_telemetry.tracer` on every AI SDK call. Never registered globally; used exclusively via this reference.                                                                      |
-| `flush`    | `() => Promise<void>`                                                                 | Drain the in-memory span buffer and POST all buffered spans to the configured endpoint. Register with `ctx.waitUntil(flush())` before returning the HTTP response. Always resolves; never rejects. |
-| `rootSpan` | `(name: string, attributes?: Record<string, string>) => { span: Span; ctx: Context }` | Create a named root span with optional attributes. Returns the span and a context with that span set as active. Pass the returned `ctx` to `context.with(ctx, handler)`.                           |
+| Member       | Type                            | Purpose                                                                                                                                                                                                              |
+| ------------ | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getTracer`  | `(scopeName: string) => Tracer` | Returns a `Tracer` bound to the given instrumentation scope name. Pass the tracer to `experimental_telemetry.tracer` on AI SDK calls. The `'ai'` scope name is the AI SDK convention; use it for AI SDK integration. |
+| `forceFlush` | `() => Promise<void>`           | Drains the in-memory span buffer and POSTs all buffered spans to the configured endpoint. Register with `ctx.waitUntil(provider.forceFlush())` before returning the HTTP response. Always resolves; never rejects.   |
 
 TypeScript interface:
 
 ```typescript
-interface TracerHandle {
-  tracer: Tracer;
-  flush: () => Promise<void>;
-  rootSpan: (
-    name: string,
-    attributes?: Record<string, string>,
-  ) => {
-    span: Span;
-    ctx: Context;
-  };
+interface TracerProvider {
+  getTracer(scopeName: string): Tracer;
+  forceFlush(): Promise<void>;
 }
 ```
 
-`Tracer`, `Span`, and `Context` are from `@opentelemetry/api`. They are not redefined here; this package imports and re-uses the upstream types.
+`Tracer` is from `@opentelemetry/api`. It is not redefined here; this package imports and re-uses the upstream type.
 
 ---
 
@@ -180,15 +172,14 @@ interface ExportTraceServiceRequest {
 
 | Term                       | Definition                                                                                                                                                                                                                                                              |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Handle                     | The object returned by `createTracerProvider`; contains `tracer`, `flush`, and `rootSpan`. The application holds this object and uses it for every AI SDK call and flush registration within a request.                                                                 |
-| Root span                  | The top-level span for a single request; created by the Hono middleware or by a direct call to `rootSpan(name, attributes?)`. All AI SDK spans within the request are parented under it and share its `traceId`.                                                        |
-| Flush (`flush`)            | The Handle method that drains the in-memory span buffer and exports all buffered spans to the OTLP endpoint in a single HTTP POST. Internally delegates to the exporter's `forceFlush()`. Registered with `ctx.waitUntil()` to run after the HTTP response is sent.     |
-| `forceFlush()`             | The exporter-level method that performs the actual buffer drain, serialization, and HTTP POST. Called by the Handle's `flush` method. Also called by `shutdown()` to drain remaining spans before the exporter is closed.                                               |
+| Provider                   | The object returned by `createTracerProvider`; exposes `getTracer(scopeName)` and `forceFlush()`. The application holds this object and uses it for every AI SDK call and flush registration within a request.                                                          |
+| Root span                  | The top-level span for a single request; created by the Hono middleware or by the application via `tracer.startActiveSpan(name, fn)`. All AI SDK spans within the request are parented under it and share its `traceId`.                                                |
+| `forceFlush()`             | The provider method that drains the in-memory span buffer, serializes spans, and POSTs them to the configured OTLP endpoint. Registered with `ctx.waitUntil()` to run after the HTTP response is sent. Always resolves; never rejects.                                  |
 | Generation                 | An OTel span representing an LLM call, carrying model, token usage, and cost attributes. Backend-specific (e.g., Langfuse classifies this as a distinct observation sub-type).                                                                                          |
-| Instrumentation scope name | The string identifier passed to `provider.getTracer(name)` when obtaining a `Tracer`. Must be `'ai'` for AI SDK spans — the convention established by the Vercel AI SDK.                                                                                                |
+| Instrumentation scope name | The string identifier passed to `provider.getTracer(scopeName)` when obtaining a `Tracer`. Must be `'ai'` for AI SDK spans — the convention established by the Vercel AI SDK.                                                                                           |
 | OTLP/HTTP JSON             | The wire protocol used by this package: OpenTelemetry Protocol over HTTP, with the payload serialized as JSON. The alternative encoding (protobuf) is not used.                                                                                                         |
 | `waitUntil`                | A Cloudflare Workers execution context API (`ctx.waitUntil(promise)`) that keeps the isolate alive until `promise` resolves, even after the HTTP response has been sent. Used to extend isolate lifetime for the flush POST.                                            |
-| Cold start                 | The first execution of a Worker module in a new isolate instance. Module-level code (including `AsyncLocalStorageContextManager` registration) runs exactly once per cold start.                                                                                        |
+| Cold start                 | The first execution of a Worker module in a new isolate instance. Module-level code runs once per cold start; `AsyncLocalStorageContextManager` registration is triggered by the first `createTracerProvider()` call, which must occur at module initialisation time.   |
 | Warm isolate               | A Worker isolate reused across multiple requests in the same instance. Module-level state persists; per-request state must not persist between requests.                                                                                                                |
 | Backend preset             | A configuration helper that constructs an `ExporterConfig` with the default `endpoint` URL and required `headers` for a specific backend. Adding a new preset requires no changes to the core exporter, processor, or provider. Langfuse is the first supported preset. |
 
@@ -200,18 +191,18 @@ This checklist captures correctness rules where a violation produces silent bad 
 
 ### Generic OTLP Correctness Rules
 
-| #   | Rule                                                                                                                                                                                 | Consequence of violation                                                                                                                                                            |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `startTimeUnixNano` and `endTimeUnixNano` are decimal strings produced by string concatenation of seconds and zero-padded nanoseconds — not by arithmetic multiplication             | Arithmetic overflow past `Number.MAX_SAFE_INTEGER` silently rounds the value; all span timestamps in the collector are wrong by an arbitrary amount, with no error thrown           |
-| 2   | `intValue` attribute values are decimal strings, not JavaScript numbers                                                                                                              | Token counts and 64-bit counters that exceed `Number.MAX_SAFE_INTEGER` are silently rounded by `JSON.stringify`; structured usage fields in the collector contain incorrect values  |
-| 3   | `parentSpanId` is omitted entirely from the JSON object when a span has no parent — an empty string `""` is not a valid substitute                                                   | Backends treat an empty `parentSpanId` as a malformed or non-root span; Langfuse rejects the span or misparses the trace hierarchy                                                  |
-| 4   | The tracer provider is never registered as the global OTel singleton — the `tracer` reference from the handle is the only path by which spans enter the provider                     | Global registration pollutes the shared OTel singleton; in warm isolates, multiple requests may write to the same global state, causing trace cross-contamination                   |
-| 5   | `AsyncLocalStorageContextManager` is active before the first request handler fires — it is registered at module initialisation time, not inside a request handler or middleware body | Context propagation falls back to the noop manager for any span created before registration; AI SDK calls made in module-level code produce orphaned spans with no parent           |
-| 6   | `flush()` always resolves — it never rejects, regardless of HTTP export errors                                                                                                       | A rejected `flush()` propagates through `ctx.waitUntil()` and leaves the isolate in an undefined termination state; subsequent spans in the same isolate may be silently dropped    |
-| 7   | `SimpleSpanProcessor` is the span processor in use — `BatchSpanProcessor` is not used                                                                                                | `BatchSpanProcessor` depends on background timers that do not survive isolate request boundaries; spans buffered in its internal queue are silently dropped when the isolate exits  |
-| 8   | `ctx.waitUntil(flush())` is called before the HTTP response is returned                                                                                                              | Once the response is returned without a `waitUntil` registration, the isolate may be torn down before the export `fetch()` completes; all buffered spans are silently dropped       |
-| 9   | For `streamText`, the flush is deferred until the response stream is fully consumed                                                                                                  | `ai.streamText.doStream` spans end only when the stream is consumed; flushing before consumption exports an incomplete span — missing end time, output tokens, and usage attributes |
-| 10  | `forceFlush()` is called to drain spans per request — `shutdown()` is not used for per-request flushing                                                                              | `shutdown()` permanently marks the exporter as shut down; subsequent `export()` calls are rejected, silently dropping all spans for the remainder of the isolate's lifetime         |
+| #   | Rule                                                                                                                                                                                                                                              | Consequence of violation                                                                                                                                                              |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `startTimeUnixNano` and `endTimeUnixNano` are decimal strings produced by string concatenation of seconds and zero-padded nanoseconds — not by arithmetic multiplication                                                                          | Arithmetic overflow past `Number.MAX_SAFE_INTEGER` silently rounds the value; all span timestamps in the collector are wrong by an arbitrary amount, with no error thrown             |
+| 2   | `intValue` attribute values are decimal strings, not JavaScript numbers                                                                                                                                                                           | Token counts and 64-bit counters that exceed `Number.MAX_SAFE_INTEGER` are silently rounded by `JSON.stringify`; structured usage fields in the collector contain incorrect values    |
+| 3   | `parentSpanId` is omitted entirely from the JSON object when a span has no parent — an empty string `""` is not a valid substitute                                                                                                                | Backends treat an empty `parentSpanId` as a malformed or non-root span; Langfuse rejects the span or misparses the trace hierarchy                                                    |
+| 4   | The tracer provider is never registered as the global OTel singleton — a `Tracer` obtained via `provider.getTracer()` is the only path by which spans enter the provider                                                                          | Global registration pollutes the shared OTel singleton; in warm isolates, multiple requests may write to the same global state, causing trace cross-contamination                     |
+| 5   | `AsyncLocalStorageContextManager` is active before the first request handler fires — it is registered on the first `createTracerProvider()` call, which must occur at module initialisation time, not inside a request handler or middleware body | Context propagation falls back to the noop manager for any span created before registration; AI SDK calls made in module-level code produce orphaned spans with no parent             |
+| 6   | `forceFlush()` always resolves — it never rejects, regardless of HTTP export errors                                                                                                                                                               | A rejected `forceFlush()` propagates through `ctx.waitUntil()` and leaves the isolate in an undefined termination state; subsequent spans in the same isolate may be silently dropped |
+| 7   | `SimpleSpanProcessor` is the span processor in use — `BatchSpanProcessor` is not used                                                                                                                                                             | `BatchSpanProcessor` depends on background timers that do not survive isolate request boundaries; spans buffered in its internal queue are silently dropped when the isolate exits    |
+| 8   | `ctx.waitUntil(provider.forceFlush())` is called before the HTTP response is returned                                                                                                                                                             | Once the response is returned without a `waitUntil` registration, the isolate may be torn down before the export `fetch()` completes; all buffered spans are silently dropped         |
+| 9   | For `streamText`, the flush is deferred until the response stream is fully consumed                                                                                                                                                               | `ai.streamText.doStream` spans end only when the stream is consumed; flushing before consumption exports an incomplete span — missing end time, output tokens, and usage attributes   |
+| 10  | `forceFlush()` is called to drain spans per request — `shutdown()` is not used for per-request flushing                                                                                                                                           | `shutdown()` permanently marks the exporter as shut down; subsequent `export()` calls are rejected, silently dropping all spans for the remainder of the isolate's lifetime           |
 
 Additional correctness rules specific to Langfuse are documented in [Backend-Specific Guidance § Langfuse § Semantic Mapping](backends/langfuse.md#semantic-mapping).
 
@@ -237,7 +228,7 @@ Adding support for a new backend requires only a new preset that constructs an `
 
 ### Custom Span Support
 
-The `tracer` member of `TracerHandle` is a standard OTel `Tracer` from `@opentelemetry/api`. Application code uses it to create manual spans for any operation that should appear in the trace — RAG retrieval, database queries, external API calls, or any other unit of work.
+A `Tracer` obtained from `provider.getTracer(scopeName)` is a standard OTel `Tracer` from `@opentelemetry/api`. Application code uses it to create manual spans for any operation that should appear in the trace — RAG retrieval, database queries, external API calls, or any other unit of work.
 
 Manual spans created via the tracer automatically join the active trace when a root context is in scope. No extra configuration is required; context inheritance follows the same rules as AI SDK spans (see [Context Propagation](behavior/context.md)).
 
@@ -251,9 +242,9 @@ The only runtime-specific integration point is how the host keeps the process al
 
 | Runtime               | ALS available                           | Flush mechanism                          | Notes          |
 | --------------------- | --------------------------------------- | ---------------------------------------- | -------------- |
-| Cloudflare Workers    | `nodejs_compat` flag                    | `ctx.waitUntil(flush())`                 | Primary target |
+| Cloudflare Workers    | `nodejs_compat` flag                    | `ctx.waitUntil(provider.forceFlush())`   | Primary target |
 | Deno Deploy           | `node:async_hooks` compatibility module | `Deno.serve` handler `waitUntil`         |                |
-| Vercel Edge Functions | V8 isolate — same model as CF           | `event.waitUntil(flush())`               |                |
+| Vercel Edge Functions | V8 isolate — same model as CF           | `event.waitUntil(provider.forceFlush())` |                |
 | AWS Lambda@Edge       | Node.js runtime — no flags              | `context.callbackWaitsForEmptyEventLoop` |                |
 
 ---

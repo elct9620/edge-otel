@@ -6,21 +6,21 @@
 
 This is an SDK library, not a web application. Clean Architecture layers are adapted for library design:
 
-| Layer                | Library Equivalent          | Contents                                         |
-| -------------------- | --------------------------- | ------------------------------------------------ |
-| Entities             | Core types & serialization  | Wire format types, OTLP JSON serializer          |
-| Use Cases            | Exporter & Provider factory | Buffer management, provider wiring, TracerHandle |
-| Interface Adapters   | Middleware & Exporters      | Hono middleware, Langfuse exporter preset        |
-| Frameworks & Drivers | OTel SDK packages           | `@opentelemetry/api`, `sdk-trace-base`, etc.     |
+| Layer                | Library Equivalent          | Contents                                           |
+| -------------------- | --------------------------- | -------------------------------------------------- |
+| Entities             | Core types & serialization  | Wire format types, OTLP JSON serializer            |
+| Use Cases            | Exporter & Provider factory | Buffer management, provider wiring, TracerProvider |
+| Interface Adapters   | Middleware & Exporters      | Hono middleware, Langfuse exporter preset          |
+| Frameworks & Drivers | OTel SDK packages           | `@opentelemetry/api`, `sdk-trace-base`, etc.       |
 
 ## Directory Mapping
 
 ```
 src/
   index.ts              Core public API barrel
-  types.ts              ExporterConfig, TracerProviderOptions, TracerHandle
+  types.ts              ExporterConfig, TracerProviderOptions, TracerProvider
   serializer.ts         ReadableSpan[] → ExportTraceServiceRequest (pure function)
-  provider.ts           createTracerProvider factory → TracerHandle (registers context manager)
+  provider.ts           createTracerProvider factory → TracerProvider (registers context manager)
   exporters/
     http.ts             OtlpHttpJsonExporter (buffer + flush + POST via fetch)
     langfuse.ts         Langfuse exporter preset — separate entry point
@@ -36,7 +36,7 @@ AI SDK natively uses the OTel API, so the core TracerProvider + Exporter is suff
 | --------------- | -------------------------------------- | ----------------------------------------------------- |
 | Core            | `@aotoki/edge-otel`                    | `createTracerProvider`, `OtlpHttpJsonExporter`, types |
 | Hono Middleware | `@aotoki/edge-otel/middleware/hono`    | `createHonoMiddleware`                                |
-| Langfuse Preset | `@aotoki/edge-otel/exporters/langfuse` | `langfusePreset`                                      |
+| Langfuse Preset | `@aotoki/edge-otel/exporters/langfuse` | `langfuseExporter`                                    |
 
 ## Dependency Guidelines
 
@@ -51,14 +51,14 @@ exporters/http.ts     → serializer.ts, types.ts
     ↑
 provider.ts           → exporters/http.ts, types.ts, @opentelemetry/context-async-hooks
 
-middleware/hono.ts    → types.ts (receives TracerHandle)
+middleware/hono.ts    → types.ts (receives TracerProvider)
 exporters/langfuse.ts → types.ts (constructs ExporterConfig)
 ```
 
 Key rules:
 
-- **Middleware does NOT depend on provider** — it receives a `TracerHandle`, not the factory module
-- **Exporters presets depend only on types** — they construct `ExporterConfig`, nothing more
+- **Middleware does NOT depend on provider** — it receives a `TracerProvider`, not the factory module
+- **Exporter presets depend only on types** — they construct `ExporterConfig`, nothing more
 - **No circular dependencies** — dependency graph is a DAG
 - **Context manager registered inside provider** — `AsyncLocalStorageContextManager` is registered on first `createTracerProvider()` call with a once-guard
 - **`context.ts` is a side-effect import** — imported for its module-scope registration, not for exports
