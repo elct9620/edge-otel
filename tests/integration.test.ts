@@ -3,9 +3,6 @@
  *
  * Validates the entire stack: provider → exporter → serializer → fetch POST,
  * with the Hono middleware managing root span lifecycle and context propagation.
- *
- * Importing from src/index.js triggers context.ts side-effect which registers
- * AsyncLocalStorageContextManager. This is required for context propagation.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { context as otelContext } from "@opentelemetry/api";
