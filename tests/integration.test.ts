@@ -211,6 +211,7 @@ describe("Integration — full request lifecycle", () => {
       const { mockFetch, calls } = createFetchCaptor();
       vi.stubGlobal("fetch", mockFetch);
 
+      vi.spyOn(console, "error").mockImplementation(() => {});
       const handle = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
 
       const app = new Hono();

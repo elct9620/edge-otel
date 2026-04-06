@@ -275,6 +275,7 @@ describe("OtlpHttpJsonExporter", () => {
         "fetch",
         vi.fn().mockRejectedValue(new Error("network error")),
       );
+      vi.spyOn(console, "warn").mockImplementation(() => {});
 
       const exporter = new OtlpHttpJsonExporter({ endpoint: DEFAULT_ENDPOINT });
       exporter.export([createMockSpan()], () => {});

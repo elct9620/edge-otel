@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { SpanStatusCode } from "@opentelemetry/api";
 import { Hono } from "hono";
 import { createHonoMiddleware } from "../../src/middleware/hono.js";
@@ -61,6 +61,11 @@ describe("createHonoMiddleware", () => {
     handle = mocks.handle;
     mockSpan = mocks.mockSpan;
     flushFn = mocks.flushFn;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   // -------------------------------------------------------------------------
