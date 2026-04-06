@@ -20,6 +20,93 @@ The Langfuse backend preset supplies the following exporter configuration values
 
 ---
 
+## Preset Configuration
+
+The Langfuse preset accepts the following options. All fields except `publicKey` and `secretKey` are optional.
+
+| Option        | Type     | Required | Description                                                                                    |
+| ------------- | -------- | -------- | ---------------------------------------------------------------------------------------------- |
+| `publicKey`   | `string` | Yes      | Langfuse public key (`pk-lf-...`). Used as the HTTP Basic Auth username.                       |
+| `secretKey`   | `string` | Yes      | Langfuse secret key (`sk-lf-...`). Used as the HTTP Basic Auth password.                       |
+| `baseUrl`     | `string` | No       | Base URL of the Langfuse instance. Defaults to `https://cloud.langfuse.com` (EU region).       |
+| `environment` | `string` | No       | Deployment environment label (e.g., `"production"`, `"staging"`). See Environment and Release. |
+| `release`     | `string` | No       | Application release identifier (e.g., `"1.0.0"`, a git SHA). See Environment and Release.      |
+
+### Return Type
+
+The preset returns an object that extends `ExporterConfig` with an optional `resourceAttributes` field.
+
+| Field                | Type                     | Present when                             | Description                                                           |
+| -------------------- | ------------------------ | ---------------------------------------- | --------------------------------------------------------------------- |
+| `endpoint`           | `string`                 | Always                                   | Full OTLP traces URL for the Langfuse instance.                       |
+| `headers`            | `Record<string, string>` | Always                                   | Authorization header and `x-langfuse-ingestion-version: 4`.           |
+| `resourceAttributes` | `Record<string, string>` | Only when `environment` or `release` set | OTel resource attributes encoding the environment and release values. |
+
+### Environment and Release via Preset
+
+The `environment` and `release` options are a convenience shortcut for setting OTel resource attributes that Langfuse reads to populate `trace.environment` and `trace.release`. The preset translates these options into the standard OTel resource attribute keys:
+
+| Preset option | OTel resource attribute       | Langfuse field      |
+| ------------- | ----------------------------- | ------------------- |
+| `environment` | `deployment.environment.name` | `trace.environment` |
+| `release`     | `service.version`             | `trace.release`     |
+
+When neither `environment` nor `release` is provided, the preset omits `resourceAttributes` entirely. No empty object is injected.
+
+### Usage Example
+
+Pass the preset return value directly into `createTracerProvider` using the spread operator. `createTracerProvider` merges `resourceAttributes` from the preset with any explicit `resourceAttributes` supplied by the caller; caller-supplied values take priority over preset defaults.
+
+```typescript
+import { createTracerProvider } from "@aotoki/edge-otel";
+import { langfuseExporter } from "@aotoki/edge-otel/exporters/langfuse";
+
+const provider = createTracerProvider({
+  ...langfuseExporter({
+    publicKey: env.LANGFUSE_PUBLIC_KEY,
+    secretKey: env.LANGFUSE_SECRET_KEY,
+    environment: "production",
+    release: "1.0.0",
+  }),
+  serviceName: "my-worker",
+});
+```
+
+The above is equivalent to writing:
+
+```typescript
+const provider = createTracerProvider({
+  endpoint: "https://cloud.langfuse.com/api/public/otel/v1/traces",
+  headers: {
+    /* auth + ingestion-version */
+  },
+  resourceAttributes: {
+    "deployment.environment.name": "production",
+    "service.version": "1.0.0",
+  },
+  serviceName: "my-worker",
+});
+```
+
+To override the environment set by the preset, supply an explicit `resourceAttributes` object after the spread — the last value for a given key wins under JavaScript object spread semantics:
+
+```typescript
+const provider = createTracerProvider({
+  ...langfuseExporter({
+    publicKey,
+    secretKey,
+    environment: "production",
+    release: "1.0.0",
+  }),
+  resourceAttributes: {
+    "deployment.environment.name": "canary", // overrides preset value
+  },
+  serviceName: "my-worker",
+});
+```
+
+---
+
 ## Semantic Mapping
 
 This section defines the rules by which Langfuse interprets OTLP spans received at its ingestion endpoint. An implementer must follow these rules precisely — most failures are silent (no HTTP error, no warning in the Langfuse UI) and produce incorrect or absent data rather than a visible error.
@@ -198,17 +285,57 @@ Langfuse sets the trace-level `level` field to the highest severity among all ob
 
 ---
 
+## AI SDK Tool Call Span Hierarchy
+
+When `generateText` (or `streamText`) uses tools, the Vercel AI SDK emits the following span structure:
+
+```
+ai.generateText                     (root span — no parentSpanId)
+  ├── ai.generateText.doGenerate    (first LLM call — child of ai.generateText)
+  ├── ai.toolCall                   (tool execution — sibling of doGenerate, child of ai.generateText)
+  └── ai.generateText.doGenerate    (second LLM call after tool result — child of ai.generateText)
+```
+
+Key structural facts:
+
+- `ai.toolCall` spans are **siblings** of `ai.generateText.doGenerate`, not children of it.
+- Both `ai.toolCall` and `ai.generateText.doGenerate` spans have `ai.generateText` as their direct parent (`parentSpanId` points to `ai.generateText`).
+- In multi-step tool flows, multiple `ai.generateText.doGenerate` and `ai.toolCall` spans are interleaved at the same level under `ai.generateText`.
+- The tool call span carries the attribute `ai.toolCall.name` identifying which tool was invoked.
+
+### Langfuse Observation Type for Tool Calls
+
+| Span name                    | Instrumentation scope | Langfuse observation type | Notes                                        |
+| ---------------------------- | --------------------- | ------------------------- | -------------------------------------------- |
+| `ai.generateText.doGenerate` | `'ai'`                | **Generation**            | Priority 4 in generation detection           |
+| `ai.streamText.doStream`     | `'ai'`                | **Generation**            | Priority 4 in generation detection           |
+| `ai.toolCall`                | `'ai'`                | **Span**                  | Does not match any generation detection rule |
+
+`ai.toolCall` spans do not match any of the generation detection rules: they carry no model name, no `gen_ai.operation.name`, and their span name does not match the priority 4 prefix. Langfuse classifies them as generic **Span** observations. They appear as children of the `ai.generateText` observation in the Langfuse UI, at the same level as the `doGenerate` generation observations.
+
+### Context Propagation Requirement for Tool Calls
+
+Tool call spans receive their `parentSpanId` from the OTel context that is active when the AI SDK invokes the tool function. If `AsyncLocalStorageContextManager` is not active, the OTel context does not flow into the tool function's async execution path. In that case, the `ai.toolCall` span starts without a parent and gets a new independent `traceId`, causing it to appear as a separate, unrelated trace in Langfuse.
+
+When `AsyncLocalStorageContextManager` is active (registered by `createTracerProvider()`), the context flows automatically into tool functions across `await` boundaries. No additional wrapping is needed — tool call spans are correctly parented to `ai.generateText` without any manual `context.with()` call.
+
+**Known failure mode**: If `nodejs_compat` is not enabled in the deployment, `AsyncLocalStorageContextManager` is unavailable. Tool call spans will float to the root level in Langfuse — each appearing as a separate Trace rather than as a child observation. This is a deployment configuration issue, not a runtime error, and produces no error message; the symptom is orphaned tool call traces in the Langfuse UI. See also: [Langfuse community discussion #6879](https://github.com/langfuse/langfuse/discussions/6879).
+
+---
+
 ## Resulting Trace Structure
 
 All spans sharing a `traceId` are grouped by Langfuse into a single Trace entity. The observation tree is determined by the `parentSpanId` relationships in the exported spans.
 
-| Condition                                                | Langfuse outcome                                                                                      |
-| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| All AI SDK calls share a `traceId`                       | A single Trace appears; the root span is the top-level observation; AI SDK spans appear as children   |
-| `ai.generateText` and `ai.generateText.doGenerate` spans | Classified as `generation` observations; token usage appears on each                                  |
-| Token usage across multiple calls                        | Rolled up across all `generation` observations within the Trace                                       |
-| One call throws an exception                             | That `generation` observation is marked `ERROR`; the Trace-level severity is also elevated to `ERROR` |
-| AI SDK calls have different `traceId`s (no propagation)  | Each call appears as a separate, unrelated Trace in Langfuse; no token roll-up across calls           |
+| Condition                                                   | Langfuse outcome                                                                                                                    |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| All AI SDK calls share a `traceId`                          | A single Trace appears; the root span is the top-level observation; AI SDK spans appear as children                                 |
+| `ai.generateText` and `ai.generateText.doGenerate` spans    | Classified as `generation` observations; token usage appears on each                                                                |
+| `ai.toolCall` span with correct `parentSpanId`              | Classified as a **Span** observation; appears as a sibling of `doGenerate` under `ai.generateText` in the Langfuse observation tree |
+| `ai.toolCall` span with missing or incorrect `parentSpanId` | Appears as a separate, unrelated Trace in Langfuse; no connection to the parent `ai.generateText` trace                             |
+| Token usage across multiple calls                           | Rolled up across all `generation` observations within the Trace                                                                     |
+| One call throws an exception                                | That `generation` observation is marked `ERROR`; the Trace-level severity is also elevated to `ERROR`                               |
+| AI SDK calls have different `traceId`s (no propagation)     | Each call appears as a separate, unrelated Trace in Langfuse; no token roll-up across calls                                         |
 
 The root span's attributes (for example `langfuse.trace.userId`, `langfuse.trace.sessionId`) propagate to the Trace entity metadata. These attributes should be set on the root span before it ends.
 
