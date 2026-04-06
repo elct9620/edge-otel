@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/elct9620/edge-otel/compare/edge-otel-v0.2.0...edge-otel-v0.2.1) (2026-04-06)
+
+
+### Bug Fixes
+
+* **release:** remove registry-url to allow npm OIDC trusted publishing ([ff5082b](https://github.com/elct9620/edge-otel/commit/ff5082b3bb2d7dc127fc8207ccc789f67e3ede42))
+
 ## [0.2.0](https://github.com/elct9620/edge-otel/compare/edge-otel-v0.1.0...edge-otel-v0.2.0) (2026-04-06)
 
 
