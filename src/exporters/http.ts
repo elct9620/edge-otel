@@ -44,13 +44,13 @@ export class OtlpHttpJsonExporter implements SpanExporter {
       });
       if (!response.ok) {
         console.warn(
-          "@aotoki/edge-otel: span export failed",
+          "[edge-otel] span export failed:",
           response.status,
           response.statusText,
         );
       }
     } catch (error) {
-      console.warn("@aotoki/edge-otel: span export failed", error);
+      console.warn("[edge-otel] span export failed:", error);
     }
   }
 

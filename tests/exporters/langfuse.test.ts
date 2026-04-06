@@ -33,19 +33,15 @@ describe("langfuseExporter", () => {
       );
     });
 
-    it("handles a custom baseUrl with a trailing slash correctly", () => {
+    it("trims a trailing slash from a custom baseUrl", () => {
       const config = langfuseExporter({
         publicKey: PUBLIC_KEY,
         secretKey: SECRET_KEY,
         baseUrl: "https://self-hosted.example.com/",
       });
 
-      // The exporter does simple string concatenation; a trailing slash produces
-      // a double-slash in the path.  This test documents the actual behaviour
-      // so that any future change (e.g. trimming the slash) is a deliberate
-      // decision rather than an accidental regression.
       expect(config.endpoint).toBe(
-        "https://self-hosted.example.com//api/public/otel/v1/traces",
+        "https://self-hosted.example.com/api/public/otel/v1/traces",
       );
     });
   });

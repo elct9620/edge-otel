@@ -17,7 +17,7 @@ const DEFAULT_BASE_URL = "https://cloud.langfuse.com";
 export function langfuseExporter(
   options: LangfuseOptions,
 ): LangfuseExporterConfig {
-  const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
+  const baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
   const credentials = btoa(`${options.publicKey}:${options.secretKey}`);
 
   const config: LangfuseExporterConfig = {
