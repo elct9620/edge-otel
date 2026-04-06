@@ -116,31 +116,31 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 
 **Journey 1: Single AI SDK call per request**
 
-|             |                                                                                                                                                                                                                                                   |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Context** | A developer has one `generateText` or `streamText` call per Worker request handler and wants it to appear as a trace in the configured collector.                                                                                                 |
-| **Action**  | The developer configures the provider with the collector endpoint and credentials, passes the resulting tracer to `experimental_telemetry.tracer` on the AI SDK call, and registers the flush with `ctx.waitUntil` before returning the response. |
-| **Outcome** | A single trace appears in the configured collector containing the AI SDK span tree (`ai.generateText`, `ai.generateText.doGenerate`) with correct timestamps, token usage, and model attributes.                                                  |
+|             |                                                                                                                                                                                                                                                                                                                          |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Context** | A developer has one `generateText` or `streamText` call per Worker request handler and wants it to appear as a trace in the configured collector.                                                                                                                                                                        |
+| **Action**  | The developer calls `createTracerProvider` with the collector endpoint and credentials, calls `provider.getTracer('ai')` to obtain a tracer, passes the tracer to `experimental_telemetry.tracer` on the AI SDK call, and registers the flush with `ctx.waitUntil(provider.forceFlush())` before returning the response. |
+| **Outcome** | A single trace appears in the configured collector containing the AI SDK span tree (`ai.generateText`, `ai.generateText.doGenerate`) with correct timestamps, token usage, and model attributes.                                                                                                                         |
 
 ---
 
 **Journey 2: Multiple AI SDK calls grouped under one trace**
 
-|             |                                                                                                                                                                                                                                                                                                                |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Context** | A developer makes multiple sequential `generateText` or `streamText` calls within one request (for example, summarise → translate → format) and wants all calls to appear as one trace rather than separate unrelated traces.                                                                                  |
-| **Action**  | The developer enables the `nodejs_compat` compatibility flag, uses the Hono middleware (or a plain Cloudflare Workers fetch handler with the same root-span pattern) to create a root span and activate it as the request context, then passes the tracer to each AI SDK call within the same request handler. |
-| **Outcome** | All AI SDK spans from the request share a single `traceId` and appear as sibling children under the root span in one trace in the collector.                                                                                                                                                                   |
+|             |                                                                                                                                                                                                                                                                                                                                               |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Context** | A developer makes multiple sequential `generateText` or `streamText` calls within one request (for example, summarise → translate → format) and wants all calls to appear as one trace rather than separate unrelated traces.                                                                                                                 |
+| **Action**  | The developer enables the `nodejs_compat` compatibility flag, uses the Hono middleware (or a plain Cloudflare Workers fetch handler with the same root-span pattern) to create a root span via `tracer.startActiveSpan()` and activate it as the request context, then passes the tracer to each AI SDK call within the same request handler. |
+| **Outcome** | All AI SDK spans from the request share a single `traceId` and appear as sibling children under the root span in one trace in the collector.                                                                                                                                                                                                  |
 
 ---
 
 **Journey 3: Custom instrumentation alongside AI SDK calls**
 
-|             |                                                                                                                                                                                           |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Context** | A developer wants RAG retrieval steps, database queries, or other application-level operations to appear as spans in the same trace as the AI SDK calls.                                  |
-| **Action**  | The developer uses the tracer returned by the provider factory to create manual spans for the custom operations, keeping them within the same active request context as the AI SDK calls. |
-| **Outcome** | Custom spans appear as siblings alongside the AI SDK spans under the same root trace in the collector, giving a complete end-to-end view of the request.                                  |
+|             |                                                                                                                                                                                                                              |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Context** | A developer wants RAG retrieval steps, database queries, or other application-level operations to appear as spans in the same trace as the AI SDK calls.                                                                     |
+| **Action**  | The developer uses the tracer obtained from `provider.getTracer()` to create manual spans via `tracer.startActiveSpan()` for the custom operations, keeping them within the same active request context as the AI SDK calls. |
+| **Outcome** | Custom spans appear as siblings alongside the AI SDK spans under the same root trace in the collector, giving a complete end-to-end view of the request.                                                                     |
 
 ---
 
@@ -169,7 +169,7 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 |             |                                                                                                                                                                                       |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Context** | A developer wants to send traces to a different OTLP-compatible collector — such as Grafana Tempo, Jaeger, Honeycomb, or a self-hosted OpenTelemetry Collector — instead of Langfuse. |
-| **Action**  | The developer changes the URL and authorization credentials in the provider constructor configuration; no other code changes are required.                                            |
+| **Action**  | The developer changes the URL and authorization credentials in the `createTracerProvider` configuration; no other code changes are required.                                          |
 | **Outcome** | The same AI SDK spans are exported to the alternative collector using OTLP/HTTP JSON; the AI SDK integration layer, middleware, and context propagation are unaffected.               |
 
 ---
@@ -198,7 +198,7 @@ See [OTLP Span Exporter](docs/behavior/exporter.md)
 
 ### Tracer Provider Factory
 
-Accepts configuration, wires `SimpleSpanProcessor` + `OtlpHttpJsonExporter` + `BasicTracerProvider` together, and returns a handle (`tracer`, `flush`, `rootSpan`). Never registers the provider as a global OTel singleton. Covers the handle contract, global registration avoidance, instrumentation scope name, resource attributes, context manager registration, root-span helper, configuration, and error scenarios.
+Accepts configuration, wires `SimpleSpanProcessor` + `OtlpHttpJsonExporter` + `BasicTracerProvider` together, and returns a `TracerProvider` with `getTracer(scopeName)` and `forceFlush()`. Named `createTracerProvider` following standard OTel convention — the application obtains a tracer via `provider.getTracer(scopeName)`. Never registers the provider as a global OTel singleton. Covers the provider contract, global registration avoidance, instrumentation scope name, resource attributes, context manager registration, root span creation via standard OTel API, configuration, and error scenarios.
 
 See [Tracer Provider Factory](docs/behavior/provider.md)
 
@@ -206,7 +206,7 @@ See [Tracer Provider Factory](docs/behavior/provider.md)
 
 ### Context Propagation
 
-Defines how AI SDK calls within one request are grouped under a single trace. Covers the `AsyncLocalStorage` pattern (requires `nodejs_compat`), the manual `context.with()` pattern (no flag required), and the pattern selection decision matrix.
+Defines how AI SDK calls within one request are grouped under a single trace. Covers the `AsyncLocalStorage` pattern (requires `nodejs_compat`), the manual `context.with()` pattern (no flag required), tool call context propagation requirements and the known failure mode when `nodejs_compat` is absent, and the pattern selection decision matrix.
 
 See [Context Propagation](docs/behavior/context.md)
 
@@ -214,7 +214,7 @@ See [Context Propagation](docs/behavior/context.md)
 
 ### Middleware
 
-Manages the root span lifecycle for a complete request: creation, context activation, error capture, span end, and flush registration. Available as a Hono variant and a plain Cloudflare Workers fetch handler variant. Covers the lifecycle phases, root span attributes, flush timing rules, `streamText` special case, both variants, and error scenarios.
+Manages the root span lifecycle for a complete request: creation via `tracer.startActiveSpan()`, context activation, error capture, span end, and flush registration via `provider.forceFlush()`. Receives a `TracerProvider` and obtains the tracer internally. Available as a Hono variant and a plain Cloudflare Workers fetch handler variant. Covers the lifecycle phases, root span attributes, flush timing rules, `streamText` special case, both variants, and error scenarios.
 
 See [Middleware](docs/behavior/middleware.md)
 
@@ -242,6 +242,6 @@ The core specification above is backend-agnostic. Backend presets provide defaul
 
 ### Langfuse
 
-Documents the Langfuse preset exporter configuration (endpoint, required header, authentication), the semantic mapping rules (data model, generation detection, token usage attribute keys, model name resolution, trace metadata attributes, environment/release, model parameters, observation level and error mapping, soft error WARNING attribute, trace-level error propagation, resulting trace structure), and the behavioral correctness rules.
+Documents the Langfuse exporter configuration (endpoint, required header, authentication, `environment` and `release` options that map to OTel resource attributes), the semantic mapping rules (data model, generation detection, token usage attribute keys, model name resolution, trace metadata attributes, environment/release, model parameters, observation level and error mapping, soft error WARNING attribute, trace-level error propagation, AI SDK tool call span hierarchy and observation type, context propagation requirement for tool calls and the known failure mode when `nodejs_compat` is absent, resulting trace structure), and the behavioral correctness rules.
 
 See [Langfuse Backend Guidance](docs/backends/langfuse.md)
