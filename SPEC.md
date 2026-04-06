@@ -85,7 +85,6 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 | 4   | `AsyncLocalStorage`-based context propagation that groups all AI SDK calls within a single request under one trace               |
 | 5   | Automatic error tracking: thrown exceptions are recorded as span events and marked `ERROR` status without manual instrumentation |
 | 6   | Manual span creation via the standard OTel `Tracer` API for custom instrumentation (RAG retrieval, database queries, etc.)       |
-| 7   | Hono middleware for root span lifecycle management: span creation, context activation, error capture, and flush registration     |
 
 ---
 
@@ -99,6 +98,7 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 | `AsyncLocalStorage`-based context propagation for multi-call trace merging (requires `nodejs_compat` flag) | Automatic propagation without the `nodejs_compat` flag                                                        |
 | Automatic `ERROR` status when exceptions are thrown by AI SDK calls                                        | Automatic `WARNING` status for soft failures (`finishReason = "error"`) — that remains manual                 |
 | Manual spans via the standard OTel `Tracer` API                                                            | Auto-instrumentation of Cloudflare bindings (KV, D1, Durable Objects)                                         |
+| Root span lifecycle is the application's responsibility                                                    | Framework-specific middleware (Hono, etc.) — the application creates and manages root spans directly          |
 | Minimal dependency surface: 4 OTel packages only                                                           | Dependency on `@opentelemetry/sdk-node`, `@langfuse/otel`, `langfuse-vercel`, or `@microlabs/otel-cf-workers` |
 
 ---
@@ -126,11 +126,11 @@ V8 isolate runtimes (Cloudflare Workers, Vercel Edge Functions, Deno Deploy) can
 
 **Journey 2: Multiple AI SDK calls grouped under one trace**
 
-|             |                                                                                                                                                                                                                                                                                                                                               |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Context** | A developer makes multiple sequential `generateText` or `streamText` calls within one request (for example, summarise → translate → format) and wants all calls to appear as one trace rather than separate unrelated traces.                                                                                                                 |
-| **Action**  | The developer enables the `nodejs_compat` compatibility flag, uses the Hono middleware (or a plain Cloudflare Workers fetch handler with the same root-span pattern) to create a root span via `tracer.startActiveSpan()` and activate it as the request context, then passes the tracer to each AI SDK call within the same request handler. |
-| **Outcome** | All AI SDK spans from the request share a single `traceId` and appear as sibling children under the root span in one trace in the collector.                                                                                                                                                                                                  |
+|             |                                                                                                                                                                                                                                                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Context** | A developer makes multiple sequential `generateText` or `streamText` calls within one request (for example, summarise → translate → format) and wants all calls to appear as one trace rather than separate unrelated traces.                                                                                           |
+| **Action**  | The developer enables the `nodejs_compat` compatibility flag, creates a root span via `tracer.startActiveSpan()` to activate it as the request context, then passes the tracer to each AI SDK call within the same request handler, and registers `ctx.waitUntil(provider.forceFlush())` before returning the response. |
+| **Outcome** | All AI SDK spans from the request share a single `traceId` and appear as sibling children under the root span in one trace in the collector.                                                                                                                                                                            |
 
 ---
 
@@ -212,14 +212,6 @@ See [Context Propagation](docs/behavior/context.md)
 
 ---
 
-### Middleware
-
-Manages the root span lifecycle for a complete request: creation via `tracer.startActiveSpan()`, context activation, error capture, span end, and flush registration via `provider.forceFlush()`. Receives a `TracerProvider` and obtains the tracer internally. Available as a Hono variant and a plain Cloudflare Workers fetch handler variant. Covers the lifecycle phases, root span attributes, flush timing rules, `streamText` special case, both variants, and error scenarios.
-
-See [Middleware](docs/behavior/middleware.md)
-
----
-
 ### Error Handling
 
 Classifies errors into hard (thrown), soft (non-thrown finish reason), and export categories. Covers automatic exception recording by the AI SDK, AI SDK error types, retry visibility, the soft error gap, OTel status code values, and export error isolation.
@@ -236,7 +228,7 @@ See [Contracts, Types & Extensibility](docs/contracts.md)
 
 ### Architecture
 
-Defines the layer structure adapted for library design (Entities → Use Cases → Interface Adapters → Frameworks & Drivers), the directory-to-layer mapping, the three entry points (Core, Hono Middleware, Langfuse Preset), and the dependency direction rules that enforce inward-only imports.
+Defines the layer structure adapted for library design (Entities → Use Cases → Interface Adapters → Frameworks & Drivers), the directory-to-layer mapping, the two entry points (Core, Langfuse Preset), and the dependency direction rules that enforce inward-only imports.
 
 See [Architecture Overview](docs/architecture.md)
 

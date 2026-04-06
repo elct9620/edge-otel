@@ -2,13 +2,15 @@
  * Integration test — full request lifecycle end-to-end
  *
  * Validates the entire stack: provider → exporter → serializer → fetch POST,
- * with the Hono middleware managing root span lifecycle and context propagation.
+ * using direct tracer.startActiveSpan() for root span lifecycle management.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { context as otelContext, trace } from "@opentelemetry/api";
-import { Hono } from "hono";
+import {
+  context as otelContext,
+  trace,
+  SpanStatusCode,
+} from "@opentelemetry/api";
 import { createTracerProvider } from "../src/index.js";
-import { createHonoMiddleware } from "../src/middleware/hono.js";
 import { langfuseExporter } from "../src/exporters/langfuse.js";
 import type { ExportTraceServiceRequest } from "../src/serializer.js";
 
@@ -35,34 +37,6 @@ function parseOtlpBody(call: { init: RequestInit }): ExportTraceServiceRequest {
   return JSON.parse(call.init.body as string);
 }
 
-/**
- * Returns a minimal executionCtx compatible with Hono's type expectations.
- * Captures the promise passed to waitUntil so tests can await it.
- */
-function createExecutionCtx() {
-  let waitUntilPromise: Promise<unknown> | undefined;
-  const ctx = {
-    waitUntil: vi.fn().mockImplementation((p: Promise<unknown>) => {
-      waitUntilPromise = p;
-    }),
-    passThroughOnException: vi.fn(),
-  };
-  return {
-    ctx,
-    getWaitUntilPromise: () => waitUntilPromise,
-  };
-}
-
-/** Helper that calls app.request with the 4th-arg executionCtx override. */
-function requestWith(
-  app: Hono,
-  path: string,
-  executionCtx: ReturnType<typeof createExecutionCtx>["ctx"],
-) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return app.request(path, undefined, undefined, executionCtx as any);
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -73,10 +47,10 @@ describe("Integration — full request lifecycle", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Scenario 1: Single request with Hono middleware produces correct OTLP payload
+  // Scenario 1: Root span with child produces correct OTLP payload
   // -------------------------------------------------------------------------
 
-  describe("Scenario 1: single request produces correct OTLP payload", () => {
+  describe("Scenario 1: root span with child produces correct OTLP payload", () => {
     it("POSTs exactly one OTLP request containing root + child spans with correct structure", async () => {
       const { mockFetch, calls } = createFetchCaptor();
       vi.stubGlobal("fetch", mockFetch);
@@ -86,22 +60,18 @@ describe("Integration — full request lifecycle", () => {
         serviceName: "integration-test",
       });
 
-      const app = new Hono();
-      app.use("*", createHonoMiddleware(provider));
-      app.get("/test", (c) => {
-        const tracer = provider.getTracer("ai");
+      const tracer = provider.getTracer("ai");
+
+      await tracer.startActiveSpan("http.request", async (rootSpanHandle) => {
         // Create a child span inside the active root context
         const child = tracer.startSpan("child-operation");
         child.setAttribute("custom.key", "custom-value");
         child.end();
-        return c.text("ok");
+        rootSpanHandle.setStatus({ code: SpanStatusCode.OK });
+        rootSpanHandle.end();
       });
 
-      const { ctx, getWaitUntilPromise } = createExecutionCtx();
-      await requestWith(app, "/test", ctx);
-
-      // Flush is registered via waitUntil — await it to complete the POST
-      await getWaitUntilPromise();
+      await provider.forceFlush();
 
       // Exactly one fetch POST should have been made
       expect(mockFetch).toHaveBeenCalledOnce();
@@ -119,7 +89,7 @@ describe("Integration — full request lifecycle", () => {
       // Instrumentation scope is 'ai'
       expect(otlp.resourceSpans[0].scopeSpans[0].scope.name).toBe("ai");
 
-      // At least 2 spans: root HTTP request + child-operation
+      // At least 2 spans: root + child-operation
       const spans = otlp.resourceSpans[0].scopeSpans[0].spans;
       expect(spans.length).toBeGreaterThanOrEqual(2);
 
@@ -161,20 +131,16 @@ describe("Integration — full request lifecycle", () => {
       const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
       const tracer = provider.getTracer("ai");
 
-      const app = new Hono();
-      app.use("*", createHonoMiddleware(provider));
-      app.get("/multi", (c) => {
+      await tracer.startActiveSpan("http.request", async (rootSpanHandle) => {
         // Simulate 3 sequential AI SDK-like calls
         for (let i = 0; i < 3; i++) {
           const span = tracer.startSpan(`ai.call.${i}`);
           span.end();
         }
-        return c.text("ok");
+        rootSpanHandle.end();
       });
 
-      const { ctx, getWaitUntilPromise } = createExecutionCtx();
-      await requestWith(app, "/multi", ctx);
-      await getWaitUntilPromise();
+      await provider.forceFlush();
 
       expect(mockFetch).toHaveBeenCalledOnce();
       const otlp = parseOtlpBody(calls[0]);
@@ -200,26 +166,32 @@ describe("Integration — full request lifecycle", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Scenario 3: Error in handler produces ERROR status span
+  // Scenario 3: Error recording on root span
   // -------------------------------------------------------------------------
 
-  describe("Scenario 3: handler error produces ERROR status span", () => {
+  describe("Scenario 3: error recording on root span", () => {
     it("root span has status code 2 (ERROR) and records an exception event", async () => {
       const { mockFetch, calls } = createFetchCaptor();
       vi.stubGlobal("fetch", mockFetch);
 
-      vi.spyOn(console, "error").mockImplementation(() => {});
       const provider = createTracerProvider({ endpoint: DEFAULT_ENDPOINT });
+      const tracer = provider.getTracer("ai");
 
-      const app = new Hono();
-      app.use("*", createHonoMiddleware(provider));
-      app.get("/boom", () => {
-        throw new Error("something went wrong");
+      await tracer.startActiveSpan("http.request", async (rootSpanHandle) => {
+        try {
+          throw new Error("something went wrong");
+        } catch (error) {
+          rootSpanHandle.recordException(error as Error);
+          rootSpanHandle.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: (error as Error).message,
+          });
+        } finally {
+          rootSpanHandle.end();
+        }
       });
 
-      const { ctx, getWaitUntilPromise } = createExecutionCtx();
-      await requestWith(app, "/boom", ctx);
-      await getWaitUntilPromise();
+      await provider.forceFlush();
 
       expect(mockFetch).toHaveBeenCalledOnce();
       const otlp = parseOtlpBody(calls[0]);

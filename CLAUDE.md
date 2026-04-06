@@ -26,18 +26,17 @@ This is a **specification-driven** project. Read the specs before implementing:
 
 - `SPEC.md` — Table of contents linking to all specification documents
 - `docs/contracts.md` — Public API surface, type contracts, wire format, 10 correctness rules
-- `docs/behavior/` — Detailed behavior specs (provider, exporter, middleware, context, error-handling)
+- `docs/behavior/` — Detailed behavior specs (provider, exporter, context, error-handling)
 - `docs/backends/` — Backend-specific guidance (e.g., Langfuse semantic mapping)
 - `docs/architecture.md` — Layer structure, directory mapping, dependency graph
 
 ### Entry Points
 
-The package has 3 separate entry points. Core captures AI SDK spans natively; middleware and exporters are opt-in extensions:
+The package has 2 separate entry points. Core captures AI SDK spans natively; the Langfuse exporter is an opt-in extension:
 
 | Entry Point       | Package Path                           | Source                      |
 | ----------------- | -------------------------------------- | --------------------------- |
 | Core              | `@aotoki/edge-otel`                    | `src/index.ts`              |
-| Hono Middleware   | `@aotoki/edge-otel/middleware/hono`    | `src/middleware/hono.ts`    |
 | Langfuse Exporter | `@aotoki/edge-otel/exporters/langfuse` | `src/exporters/langfuse.ts` |
 
 ### Dependency Direction
@@ -47,12 +46,11 @@ All imports point inward. Outer modules never import inner modules' peers:
 ```
 types.ts ← serializer.ts ← exporters/http.ts ← provider.ts
                                                     ↑
-middleware/hono.ts → types.ts only             @opentelemetry/context-async-hooks
+                                              @opentelemetry/context-async-hooks
 exporters/langfuse.ts → types.ts only
 ```
 
 - `provider.ts` registers `AsyncLocalStorageContextManager` on first `createTracerProvider()` call (once-guard, no side-effect import).
-- `middleware/hono.ts` receives a `TracerProvider`, never imports `provider.ts`.
 - `exporters/langfuse.ts` constructs an `ExporterConfig`, nothing more.
 
 ### Key Constraints

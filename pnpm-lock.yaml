@@ -33,9 +33,6 @@ importers:
       eslint:
         specifier: ^10.2.0
         version: 10.2.0(jiti@2.6.1)
-      hono:
-        specifier: ^4.12.10
-        version: 4.12.10
       jiti:
         specifier: ^2.6.1
         version: 2.6.1
@@ -623,10 +620,6 @@ packages:
   has-flag@4.0.0:
     resolution: {integrity: sha512-EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ==}
     engines: {node: '>=8'}
-
-  hono@4.12.10:
-    resolution: {integrity: sha512-mx/p18PLy5og9ufies2GOSUqep98Td9q4i/EF6X7yJgAiIopxqdfIO3jbqsi3jRgTgw88jMDEzVKi+V2EF+27w==}
-    engines: {node: '>=16.9.0'}
 
   hookable@6.1.0:
     resolution: {integrity: sha512-ZoKZSJgu8voGK2geJS+6YtYjvIzu9AOM/KZXsBxr83uhLL++e9pEv/dlgwgy3dvHg06kTz6JOh1hk3C8Ceiymw==}
@@ -1644,8 +1637,6 @@ snapshots:
       is-glob: 4.0.3
 
   has-flag@4.0.0: {}
-
-  hono@4.12.10: {}
 
   hookable@6.1.0: {}
 

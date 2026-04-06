@@ -19,7 +19,6 @@ The package exposes exactly the following identifiers at its public boundary. In
 | `TracerProviderOptions` | Interface | Configuration accepted by the factory; extends the exporter config with `serviceName` and `resourceAttributes` |
 | `ExporterConfig`        | Interface | Endpoint and headers configuration for the OTLP/HTTP exporter                                                  |
 | `OtlpHttpJsonExporter`  | Class     | The OTLP/HTTP JSON exporter; exported for advanced use (custom processor wiring, multiple backends)            |
-| `createHonoMiddleware`  | Function  | Returns a Hono middleware function that manages root span lifecycle for a complete Hono request                |
 
 `OtlpHttpJsonExporter` is exported because implementers wiring multiple backends or a custom `SimpleSpanProcessor` need direct access to the exporter instance. It is not required for typical single-backend use.
 
@@ -38,11 +37,10 @@ Backend presets (e.g., a Langfuse preset) may provide convenience wrappers that 
 
 `TracerProviderOptions` extends `ExporterConfig` with additional fields.
 
-| Field                | Type                     | Required | Default               | Description                                                                                                                                                                                                                                                                                                                                                                                |
-| -------------------- | ------------------------ | -------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `serviceName`        | `string`                 | No       | `'cloudflare-worker'` | Value of the `service.name` OTel resource attribute attached to all spans.                                                                                                                                                                                                                                                                                                                 |
-| `scopeName`          | `string`                 | No       | `'ai'`                | Default instrumentation scope name used by the middleware's internal tracer. Must be `'ai'` for AI SDK spans — the convention established by the Vercel AI SDK. Application code may also call `provider.getTracer(otherScope)` directly to obtain additional tracers with different scope names; all tracers share the same export pipeline. See Provider Factory — Multiple Scope Names. |
-| `resourceAttributes` | `Record<string, string>` | No       | `{}`                  | Additional OTel resource attributes merged into the resource. Used for backend metadata (e.g., environment, release). When a backend preset also returns `resourceAttributes`, the caller's explicit values override the preset's values — the last write for any given key wins under JavaScript object spread semantics.                                                                 |
+| Field                | Type                     | Required | Default               | Description                                                                                                                                                                                                                                                                                                                |
+| -------------------- | ------------------------ | -------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serviceName`        | `string`                 | No       | `'cloudflare-worker'` | Value of the `service.name` OTel resource attribute attached to all spans.                                                                                                                                                                                                                                                 |
+| `resourceAttributes` | `Record<string, string>` | No       | `{}`                  | Additional OTel resource attributes merged into the resource. Used for backend metadata (e.g., environment, release). When a backend preset also returns `resourceAttributes`, the caller's explicit values override the preset's values — the last write for any given key wins under JavaScript object spread semantics. |
 
 TypeScript interface:
 
@@ -54,7 +52,6 @@ interface ExporterConfig {
 
 interface TracerProviderOptions extends ExporterConfig {
   serviceName?: string;
-  scopeName?: string;
   resourceAttributes?: Record<string, string>;
 }
 ```
@@ -173,7 +170,7 @@ interface ExportTraceServiceRequest {
 | Term                       | Definition                                                                                                                                                                                                                                                              |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Provider                   | The object returned by `createTracerProvider`; exposes `getTracer(scopeName)` and `forceFlush()`. The application holds this object and uses it for every AI SDK call and flush registration within a request.                                                          |
-| Root span                  | The top-level span for a single request; created by the Hono middleware or by the application via `tracer.startActiveSpan(name, fn)`. All AI SDK spans within the request are parented under it and share its `traceId`.                                                |
+| Root span                  | The top-level span for a single request; created by the application via `tracer.startActiveSpan(name, fn)`. All AI SDK spans within the request are parented under it and share its `traceId`.                                                                          |
 | `forceFlush()`             | The provider method that drains the in-memory span buffer, serializes spans, and POSTs them to the configured OTLP endpoint. Registered with `ctx.waitUntil()` to run after the HTTP response is sent. Always resolves; never rejects.                                  |
 | Generation                 | An OTel span representing an LLM call, carrying model, token usage, and cost attributes. Backend-specific (e.g., Langfuse classifies this as a distinct observation sub-type).                                                                                          |
 | Instrumentation scope name | The string identifier passed to `provider.getTracer(scopeName)` when obtaining a `Tracer`. Must be `'ai'` for AI SDK spans — the convention established by the Vercel AI SDK.                                                                                           |
