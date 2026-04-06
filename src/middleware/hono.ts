@@ -1,4 +1,4 @@
-import { context, trace, SpanStatusCode } from "@opentelemetry/api";
+import { SpanStatusCode } from "@opentelemetry/api";
 import type { MiddlewareHandler } from "hono";
 import type { TracerProvider } from "../types.js";
 
@@ -19,10 +19,7 @@ export function createHonoMiddleware(
   const tracer = provider.getTracer(options?.scopeName ?? DEFAULT_SCOPE_NAME);
 
   return async (c, next) => {
-    const span = tracer.startSpan(spanName, { attributes });
-    const ctx = trace.setSpan(context.active(), span);
-
-    await context.with(ctx, async () => {
+    await tracer.startActiveSpan(spanName, { attributes }, async (span) => {
       let deferredPromise: Promise<unknown> | undefined;
       const deferFlush = (promise: Promise<unknown>): void => {
         deferredPromise = promise;

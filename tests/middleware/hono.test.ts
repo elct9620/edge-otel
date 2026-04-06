@@ -17,8 +17,15 @@ function createMockProvider() {
   };
 
   const mockTracer = {
-    startSpan: vi.fn().mockReturnValue(mockSpan),
-    startActiveSpan: vi.fn(),
+    startActiveSpan: vi
+      .fn()
+      .mockImplementation(
+        (
+          _name: string,
+          _options: unknown,
+          fn: (span: typeof mockSpan) => unknown,
+        ) => fn(mockSpan),
+      ),
   };
 
   const forceFlushFn = vi.fn().mockResolvedValue(undefined);
@@ -77,7 +84,7 @@ describe("createHonoMiddleware", () => {
   // -------------------------------------------------------------------------
 
   describe("root span creation", () => {
-    it("calls startSpan with the default name 'http.request' when no options provided", async () => {
+    it("calls startActiveSpan with the default name 'http.request' when no options provided", async () => {
       const { mockTracer } = createMockProvider();
       const localProvider: TracerProvider = {
         getTracer: vi.fn().mockReturnValue(mockTracer),
@@ -90,12 +97,14 @@ describe("createHonoMiddleware", () => {
 
       await requestWith(app, "/test", createExecutionCtx());
 
-      expect(mockTracer.startSpan).toHaveBeenCalledWith("http.request", {
-        attributes: undefined,
-      });
+      expect(mockTracer.startActiveSpan).toHaveBeenCalledWith(
+        "http.request",
+        { attributes: undefined },
+        expect.any(Function),
+      );
     });
 
-    it("calls startSpan with a custom span name when provided in options", async () => {
+    it("calls startActiveSpan with a custom span name when provided in options", async () => {
       const { mockTracer } = createMockProvider();
       const localProvider: TracerProvider = {
         getTracer: vi.fn().mockReturnValue(mockTracer),
@@ -111,12 +120,14 @@ describe("createHonoMiddleware", () => {
 
       await requestWith(app, "/test", createExecutionCtx());
 
-      expect(mockTracer.startSpan).toHaveBeenCalledWith("my.custom.span", {
-        attributes: undefined,
-      });
+      expect(mockTracer.startActiveSpan).toHaveBeenCalledWith(
+        "my.custom.span",
+        { attributes: undefined },
+        expect.any(Function),
+      );
     });
 
-    it("calls startSpan with custom attributes when provided in options", async () => {
+    it("calls startActiveSpan with custom attributes when provided in options", async () => {
       const { mockTracer } = createMockProvider();
       const localProvider: TracerProvider = {
         getTracer: vi.fn().mockReturnValue(mockTracer),
@@ -130,9 +141,11 @@ describe("createHonoMiddleware", () => {
 
       await requestWith(app, "/test", createExecutionCtx());
 
-      expect(mockTracer.startSpan).toHaveBeenCalledWith("http.request", {
-        attributes,
-      });
+      expect(mockTracer.startActiveSpan).toHaveBeenCalledWith(
+        "http.request",
+        { attributes },
+        expect.any(Function),
+      );
     });
   });
 
