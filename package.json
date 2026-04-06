@@ -49,6 +49,14 @@
     "cloudflare-workers",
     "tracing"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elct9620/edge-otel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/elct9620/edge-otel/issues"
+  },
+  "homepage": "https://github.com/elct9620/edge-otel#readme",
   "author": "Aotokitsuruya",
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.28.0",
