@@ -53,6 +53,27 @@ The instrumentation scope name is passed to `provider.getTracer(scopeName)` at t
 const tracer = provider.getTracer("ai");
 ```
 
+### Multiple Scope Names
+
+The application may call `provider.getTracer(scopeName)` multiple times with different scope names. This is standard OTel usage — each instrumentation library or application module uses its own scope name to identify the source of its spans.
+
+| Aspect           | Behavior                                                                                                                                                                                                        |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared pipeline  | All tracers from the same provider share the same `SpanProcessor` and `SpanExporter`. The scope name does not create separate export paths or separate span buffers.                                            |
+| Wire format      | Spans are grouped by scope name in the OTLP payload under separate `scopeSpans` entries within the same `resourceSpans`. This is organizational; it does not affect trace continuity.                           |
+| Parent-child     | A span from one scope can be a child of a span from a different scope. Parentage is determined by the active context, not by the scope name.                                                                    |
+| Backend behavior | Some backends apply scope-specific logic (e.g., Langfuse extracts token usage only from the `'ai'` scope). Spans under other scope names are exported normally but may not receive backend-specific enrichment. |
+
+```typescript
+const aiTracer = provider.getTracer("ai"); // AI SDK spans
+const appTracer = provider.getTracer("my-app"); // custom application spans
+
+tracer.startActiveSpan("rag-retrieval", async (span) => {
+  // This span appears under scope "my-app" in the OTLP payload,
+  // but shares the same traceId as the parent AI SDK span.
+});
+```
+
 ---
 
 ## AI SDK–Generated Spans
